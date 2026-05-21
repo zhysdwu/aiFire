@@ -50,7 +50,7 @@ const headerMeta = computed(() => ({
 }));
 
 fetchSessionInfo().then((info) => {
-  isAdmin.value = !!info?.is_admin;
+  isAdmin.value = info?.is_admin;
 });
 
 watchEffect(async () => {
