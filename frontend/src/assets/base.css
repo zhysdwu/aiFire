@@ -1,0 +1,52 @@
+﻿:root {
+  --bg-main: #f6f3eb;
+  --bg-panel: #fffdfa;
+  --bg-panel-soft: #f1ece1;
+  --ink-strong: #1f1b16;
+  --ink-soft: #63584a;
+  --line: #d7cbb5;
+  --brand: #0f766e;
+  --brand-strong: #0b5e59;
+  --accent: #c08457;
+  --danger: #a63b2f;
+  --shadow-soft: 0 10px 30px rgba(54, 42, 27, 0.09);
+  --shadow-strong: 0 18px 45px rgba(54, 42, 27, 0.17);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  color: var(--ink-strong);
+  background:
+    radial-gradient(circle at 10% 0%, #efe7d7 0, #f6f3eb 36%),
+    radial-gradient(circle at 90% 100%, #e7dfd0 0, transparent 42%),
+    var(--bg-main);
+  font-family: "Noto Sans SC", "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
+  line-height: 1.5;
+  text-rendering: optimizeLegibility;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}

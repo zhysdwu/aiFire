@@ -1,0 +1,29 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+  <div class="module">
+    <h2>关键词删除记录（独立页面）</h2>
+    <p>说明：这里只展示删除日志，不在模型列表中显示“关键词删除记录”入口。</p>
+
+    {% if logs %}
+      <div class="status-grid">
+        {% for item in logs %}
+          <div class="status-card">
+            <h3>{{ item.phrase.text }}</h3>
+            <div class="status-line">删除时间：{{ item.created_at|date:"Y-m-d H:i:s" }}</div>
+            <div class="status-line">操作人：{{ item.operator.username|default:"系统" }}</div>
+            <div class="status-line">删除原因：{{ item.get_reason_type_display }}</div>
+            {% if item.reason_text %}
+              <div class="status-line">备注：{{ item.reason_text }}</div>
+            {% endif %}
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="status-card" style="margin-top:12px;">
+        <h3>暂无删除记录</h3>
+        <div class="status-line">当前还没有管理员执行逻辑删除。</div>
+      </div>
+    {% endif %}
+  </div>
+{% endblock %}

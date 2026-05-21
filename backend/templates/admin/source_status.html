@@ -1,0 +1,39 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+  <div class="module">
+    <h2>数据源运行状态</h2>
+    <p>当前时间：{{ now|date:"Y-m-d H:i:s" }}</p>
+    <p>自动切换规则：连续失败后，在 {{ failover_after_minutes }} 分钟冷却窗口内优先尝试其他策略；若其他策略均失败，再回试该策略。</p>
+    <div class="status-grid">
+      {% for item in statuses %}
+        <div class="status-card">
+          <h3>{{ item.display_name }}</h3>
+          <div class="status-line">来源标识：{{ item.source_key }}</div>
+          <div class="status-line">平台：{{ item.get_platform_display }}</div>
+          <div class="status-line">
+            最近结果：
+            {% if item.last_success %}
+              <span class="status-ok">成功</span>
+            {% else %}
+              <span class="status-fail">失败</span>
+            {% endif %}
+          </div>
+          <div class="status-line">连续失败次数：{{ item.consecutive_failures }}</div>
+          <div class="status-line">失败起始时间：{{ item.first_failure_at|date:"Y-m-d H:i:s" }}</div>
+          <div class="status-line">最近采集条数：{{ item.last_count }}</div>
+          <div class="status-line">最近尝试时间：{{ item.last_attempt_at|date:"Y-m-d H:i:s" }}</div>
+          <div class="status-line">最近成功时间：{{ item.last_success_at|date:"Y-m-d H:i:s" }}</div>
+          {% if item.error_message %}
+            <div class="status-line">失败信息：{{ item.error_message }}</div>
+          {% endif %}
+        </div>
+      {% empty %}
+        <div class="status-card">
+          <h3>暂无状态数据</h3>
+          <div class="status-line">请先运行一次采集命令。</div>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+{% endblock %}

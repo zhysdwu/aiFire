@@ -1,0 +1,30 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+  <div class="module">
+    <h2>逻辑删除关键词</h2>
+    <p>你即将逻辑删除以下关键词（不会物理删除数据）：</p>
+    <ul>
+      {% for phrase in phrases %}
+        <li>{{ phrase.text }}</li>
+      {% empty %}
+        <li>没有可删除的关键词。</li>
+      {% endfor %}
+    </ul>
+  </div>
+
+  <div class="module">
+    <form method="post">
+      {% csrf_token %}
+      {% for phrase in queryset %}
+        <input type="hidden" name="{{ action_checkbox_name }}" value="{{ phrase.pk }}">
+      {% endfor %}
+      <input type="hidden" name="action" value="soft_delete_selected">
+      <input type="hidden" name="apply" value="1">
+      {{ form.as_p }}
+      <div class="submit-row">
+        <input type="submit" class="default" value="确认逻辑删除">
+      </div>
+    </form>
+  </div>
+{% endblock %}
