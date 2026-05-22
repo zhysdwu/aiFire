@@ -158,6 +158,22 @@ class DataSourceStatus(models.Model):
         verbose_name_plural = "数据源状态"
 
 
+class DailyFetchCheckpoint(models.Model):
+    key = models.CharField(max_length=32, unique=True, default="default")
+    last_success_date = models.DateField(null=True, blank=True)
+    last_success_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    @classmethod
+    def get_default(cls) -> "DailyFetchCheckpoint":
+        obj, _ = cls.objects.get_or_create(key="default")
+        return obj
+
+    class Meta:
+        verbose_name = "每日抓取检查点"
+        verbose_name_plural = "每日抓取检查点"
+
+
 class PhraseDeleteLog(models.Model):
     phrase = models.ForeignKey(Phrase, on_delete=models.CASCADE, related_name="delete_logs")
     operator = models.ForeignKey("auth.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="phrase_delete_logs")

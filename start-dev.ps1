@@ -117,6 +117,13 @@ $backendOk = Wait-HttpOk "http://127.0.0.1:8000/admin/login/" 8
 $frontendOk = Wait-HttpOk "http://127.0.0.1:5173/" 8
 
 if ($backendOk) {
+    Write-Host "执行数据库迁移检查..."
+    try {
+        & "D:\aiFire\.venv\Scripts\python.exe" "D:\aiFire\backend\manage.py" "migrate" "--noinput"
+    } catch {
+        Write-Host "数据库迁移执行失败: $($_.Exception.Message)"
+    }
+
     Write-Host "检查今日是否已抓取数据..."
     try {
         & "D:\aiFire\.venv\Scripts\python.exe" "D:\aiFire\backend\manage.py" "ensure_daily_fetch" "--source" "official" "--limit" "60" "--failover-after-minutes" "30"
