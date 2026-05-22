@@ -1,12 +1,31 @@
+from django.db.models import Avg
 from django.utils import timezone
+from django.utils.decorators import method_decorator
+from django.views.decorators.cache import never_cache
 from rest_framework import generics, permissions, status
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.trends.api.serializers import GeneratedTitleSerializer, PhraseDetailSerializer, PhraseListSerializer
-from apps.trends.models import DeleteReasonType, GeneratedTitle, Phrase, PhraseDeleteLog, RiskLevel, Window
+from apps.trends.api.serializers import (
+    GeneratedTitleSerializer,
+    PhraseDeleteLogSerializer,
+    PhraseDetailSerializer,
+    PhraseListSerializer,
+)
+from apps.trends.models import DeleteReasonType, GeneratedTitle, Phrase, PhraseDeleteLog, Platform, RiskLevel, Window
+from apps.trends.services.analytics import build_analytics_overview
+from apps.trends.services.assistant import answer_assistant_question, normalize_platform
 from apps.trends.services.deepseek_client import DeepSeekClient
+from apps.trends.services.workflow import build_today_workflow_status
+
+
+SOCIAL_PLATFORMS = {Platform.TIKTOK, Platform.INSTAGRAM, Platform.FACEBOOK}
+
+
+def normalize_social_platform(value: str) -> str:
+    platform = (value or Platform.TIKTOK).strip().lower()
+    return platform if platform in SOCIAL_PLATFORMS else Platform.TIKTOK
 
 
 class PhraseListView(generics.ListAPIView):
@@ -18,8 +37,9 @@ class PhraseListView(generics.ListAPIView):
         sort = request.query_params.get("sort", "heat")
         q = request.query_params.get("q", "").strip()
         risk = request.query_params.get("risk", "").strip()
+        platform = normalize_social_platform(request.query_params.get("platform", Platform.TIKTOK))
 
-        qs = Phrase.objects.filter(is_deleted=False)
+        qs = Phrase.objects.filter(is_deleted=False, platform=platform)
         if q:
             qs = qs.filter(text__icontains=q)
         if risk in {RiskLevel.LOW, RiskLevel.MEDIUM, RiskLevel.HIGH}:
@@ -51,9 +71,67 @@ class PhraseDetailView(generics.RetrieveAPIView):
     serializer_class = PhraseDetailSerializer
 
 
+class PlatformSummaryView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        platform = normalize_social_platform(request.query_params.get("platform", Platform.TIKTOK))
+        phrases = Phrase.objects.filter(is_deleted=False, platform=platform).exclude(risk_level=RiskLevel.BLOCKED)
+        metrics = phrases.filter(metrics__window=Window.H24).aggregate(avg_heat=Avg("metrics__heat_score"))
+        top_keywords = list(phrases.order_by("-last_seen_at", "-created_at").values_list("text", flat=True)[:5])
+        last_updated_at = phrases.order_by("-last_seen_at").values_list("last_seen_at", flat=True).first()
+        return Response(
+            {
+                "platform": platform,
+                "total_phrases": phrases.count(),
+                "avg_heat_score": round(float(metrics.get("avg_heat") or 0), 2),
+                "top_keywords": top_keywords,
+                "last_updated_at": last_updated_at,
+            }
+        )
+
+
+class AnalyticsOverviewView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        return Response(build_analytics_overview())
+
+
+class WorkflowStatusView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        return Response(build_today_workflow_status())
+
+
+class AssistantChatView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        question = (request.data.get("question") or "").strip()
+        if len(question) < 2:
+            return Response({"detail": "问题太短"}, status=status.HTTP_400_BAD_REQUEST)
+
+        phrase_id = request.data.get("phrase_id")
+        if phrase_id in {"", None}:
+            phrase_id = None
+        elif not str(phrase_id).isdigit():
+            phrase_id = None
+        return Response(
+            answer_assistant_question(
+                normalize_platform(request.data.get("platform") or Platform.TIKTOK),
+                question,
+                phrase_id,
+                request.user,
+            )
+        )
+
+
+@method_decorator(never_cache, name="dispatch")
 class SessionInfoView(APIView):
     authentication_classes = [SessionAuthentication]
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAdminUser]
 
     def get(self, request):
         user = request.user
@@ -100,6 +178,15 @@ class PhraseSoftDeleteView(APIView):
         return Response({"detail": "删除成功"}, status=status.HTTP_200_OK)
 
 
+class PhraseDeleteLogListView(generics.ListAPIView):
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [permissions.IsAdminUser]
+    serializer_class = PhraseDeleteLogSerializer
+
+    def get_queryset(self):
+        return PhraseDeleteLog.objects.select_related("phrase", "operator").order_by("-created_at")
+
+
 class GeneratedTitleFeedbackView(APIView):
     authentication_classes = [SessionAuthentication]
     permission_classes = [permissions.IsAdminUser]
@@ -124,11 +211,11 @@ class GeneratedTitleFeedbackView(APIView):
                 system=(
                     "You are a TikTok copywriting assistant. "
                     "Given original title/caption and user feedback, rewrite them. "
-                    "Return JSON: {\"title\":\"...\",\"caption\":\"...\",\"reply\":\"...\"}."
+                    'Return JSON: {"title":"...","caption":"...","reply":"..."}.'
                 ),
                 user=(
-                    f"ORIGINAL_TITLE: {item.title}\\n"
-                    f"ORIGINAL_CAPTION: {item.caption}\\n"
+                    f"ORIGINAL_TITLE: {item.title}\n"
+                    f"ORIGINAL_CAPTION: {item.caption}\n"
                     f"USER_FEEDBACK: {feedback}"
                 ),
             )

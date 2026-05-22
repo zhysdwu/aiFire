@@ -370,7 +370,7 @@ class Command(BaseCommand):
         snapshots = list(snapshots_qs[: max(limit * 3, 180)])
         if not snapshots:
             self.stdout.write(self.style.WARNING("没有可用快照数据，任务结束。"))
-            return False
+            return ""
 
         texts = [item.title_text for item in snapshots] + [item.caption_text for item in snapshots]
 
@@ -399,7 +399,7 @@ class Command(BaseCommand):
         phrases = merged_phrases[:100]
         if not phrases:
             self.stdout.write(self.style.WARNING("未提取到有效关键词，任务结束。"))
-            return False
+            return ""
 
         now = timezone.now()
         metric_by_phrase: dict[str, dict] = {}
@@ -498,4 +498,4 @@ class Command(BaseCommand):
                 )
 
         self.stdout.write(self.style.SUCCESS("Daily pipeline done"))
-        return True
+        return "success"

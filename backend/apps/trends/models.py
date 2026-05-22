@@ -5,6 +5,8 @@ from django.db import models
 
 class Platform(models.TextChoices):
     TIKTOK = "tiktok", "TikTok"
+    INSTAGRAM = "instagram", "Instagram"
+    FACEBOOK = "facebook", "Facebook"
     GOOGLE_TRENDS = "gtrends", "Google Trends"
     ANSWER_THE_PUBLIC = "atp", "AnswerThePublic"
 
@@ -22,11 +24,26 @@ class Window(models.TextChoices):
     D30 = "30d", "30d"
 
 
+class WorkflowStatus(models.TextChoices):
+    PENDING = "pending", "Pending"
+    RUNNING = "running", "Running"
+    SUCCESS = "success", "Success"
+    FAILED = "failed", "Failed"
+    SKIPPED = "skipped", "Skipped"
+
+
+class AssistantIntent(models.TextChoices):
+    TREND_ANALYSIS = "trend_analysis", "Trend Analysis"
+    PLATFORM_COMPARE = "platform_compare", "Platform Compare"
+    TITLE_REFINE = "title_refine", "Title Refine"
+    GENERAL = "general", "General"
+
+
 class DeleteReasonType(models.TextChoices):
-    INVALID = "invalid", "无效字段"
-    ILLEGAL = "illegal", "非法字段"
-    DUPLICATE = "duplicate", "重复字段"
-    CUSTOM = "custom", "自定义理由"
+    INVALID = "invalid", "Invalid field"
+    ILLEGAL = "illegal", "Illegal field"
+    DUPLICATE = "duplicate", "Duplicate field"
+    CUSTOM = "custom", "Custom reason"
 
 
 class Category(models.Model):
@@ -39,10 +56,6 @@ class Category(models.Model):
 
     def __str__(self) -> str:
         return f"{self.name_en} / {self.name_zh}"
-
-    class Meta:
-        verbose_name = "类别"
-        verbose_name_plural = "类别管理"
 
 
 class TikTokRawSnapshot(models.Model):
@@ -57,12 +70,11 @@ class TikTokRawSnapshot(models.Model):
 
     class Meta:
         indexes = [models.Index(fields=["platform", "region", "fetched_at"])]
-        verbose_name = "平台原始快照"
-        verbose_name_plural = "平台原始快照"
 
 
 class Phrase(models.Model):
-    text = models.CharField(max_length=255, unique=True)
+    text = models.CharField(max_length=255)
+    platform = models.CharField(max_length=16, choices=Platform.choices, default=Platform.TIKTOK)
     language = models.CharField(max_length=8, default="en")
     category = models.ForeignKey(Category, null=True, blank=True, on_delete=models.SET_NULL)
     risk_level = models.CharField(max_length=16, choices=RiskLevel.choices, default=RiskLevel.LOW)
@@ -79,8 +91,7 @@ class Phrase(models.Model):
         return self.text
 
     class Meta:
-        verbose_name = "爆款词短语"
-        verbose_name_plural = "爆款词短语"
+        unique_together = [("text", "platform")]
 
 
 class EvidenceLink(models.Model):
@@ -88,10 +99,6 @@ class EvidenceLink(models.Model):
     url = models.URLField()
     title = models.CharField(max_length=255, blank=True, default="")
     fetched_at = models.DateTimeField(auto_now_add=True)
-
-    class Meta:
-        verbose_name = "证据链接"
-        verbose_name_plural = "证据链接"
 
 
 class PhraseMetricWindow(models.Model):
@@ -105,8 +112,6 @@ class PhraseMetricWindow(models.Model):
 
     class Meta:
         unique_together = [("phrase", "window")]
-        verbose_name = "短语窗口指标"
-        verbose_name_plural = "短语窗口指标"
 
 
 class GeneratedTitle(models.Model):
@@ -122,19 +127,11 @@ class GeneratedTitle(models.Model):
     refined_count = models.IntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
 
-    class Meta:
-        verbose_name = "生成标题"
-        verbose_name_plural = "生成标题"
-
 
 class RuleConfig(models.Model):
     key = models.CharField(max_length=64, unique=True)
     value = models.JSONField(default=dict)
     updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        verbose_name = "规则配置"
-        verbose_name_plural = "规则配置"
 
 
 class DataSourceStatus(models.Model):
@@ -153,25 +150,21 @@ class DataSourceStatus(models.Model):
     def __str__(self) -> str:
         return f"{self.display_name} ({self.source_key})"
 
-    class Meta:
-        verbose_name = "数据源状态"
-        verbose_name_plural = "数据源状态"
-
 
 class DailyFetchCheckpoint(models.Model):
-    key = models.CharField(max_length=32, unique=True, default="default")
+    key = models.CharField(max_length=32, unique=True)
     last_success_date = models.DateField(null=True, blank=True)
     last_success_at = models.DateTimeField(null=True, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     @classmethod
     def get_default(cls) -> "DailyFetchCheckpoint":
-        obj, _ = cls.objects.get_or_create(key="default")
-        return obj
+        return cls.get_for_platform(Platform.TIKTOK)
 
-    class Meta:
-        verbose_name = "每日抓取检查点"
-        verbose_name_plural = "每日抓取检查点"
+    @classmethod
+    def get_for_platform(cls, platform: str) -> "DailyFetchCheckpoint":
+        obj, _ = cls.objects.get_or_create(key=platform)
+        return obj
 
 
 class PhraseDeleteLog(models.Model):
@@ -181,6 +174,33 @@ class PhraseDeleteLog(models.Model):
     reason_text = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
+
+class DailyWorkflowRun(models.Model):
+    platform = models.CharField(max_length=16, choices=Platform.choices)
+    run_date = models.DateField()
+    fetch_status = models.CharField(max_length=16, choices=WorkflowStatus.choices, default=WorkflowStatus.PENDING)
+    extract_status = models.CharField(max_length=16, choices=WorkflowStatus.choices, default=WorkflowStatus.PENDING)
+    recommend_status = models.CharField(max_length=16, choices=WorkflowStatus.choices, default=WorkflowStatus.PENDING)
+    last_message = models.CharField(max_length=255, blank=True, default="")
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
     class Meta:
-        verbose_name = "关键词删除记录"
-        verbose_name_plural = "关键词删除记录"
+        unique_together = [("platform", "run_date")]
+
+
+class AssistantMessageLog(models.Model):
+    platform = models.CharField(max_length=16, choices=Platform.choices, default=Platform.TIKTOK)
+    phrase = models.ForeignKey(Phrase, null=True, blank=True, on_delete=models.SET_NULL, related_name="assistant_logs")
+    question = models.TextField()
+    answer = models.TextField()
+    intent = models.CharField(max_length=32, choices=AssistantIntent.choices, default=AssistantIntent.GENERAL)
+    created_by = models.ForeignKey(
+        "auth.User",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="assistant_message_logs",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)

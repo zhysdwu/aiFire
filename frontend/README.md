@@ -31,6 +31,14 @@ npm install
 npm run dev
 ```
 
+### Admin entry (optional)
+
+By default the public page does not show the "进入管理员视图" entry. If you want to expose it for local development, set:
+
+```sh
+VITE_SHOW_ADMIN_ENTRY=true
+```
+
 ### Compile and Minify for Production
 
 ```sh
