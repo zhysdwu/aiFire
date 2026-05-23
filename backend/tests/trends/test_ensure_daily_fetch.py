@@ -3,7 +3,8 @@ from django.utils import timezone
 from django.core.management import call_command
 
 from apps.trends.management.commands import ensure_daily_fetch as ensure_daily_fetch_module
-from apps.trends.models import DailyFetchCheckpoint, DailyWorkflowRun, Platform, WorkflowStatus
+from apps.trends.management.commands import run_daily_pipeline as pipeline_module
+from apps.trends.models import DailyFetchCheckpoint, DailyWorkflowRun, Phrase, Platform, RiskLevel, WorkflowStatus
 
 
 ALL_SOCIAL = [Platform.TIKTOK, Platform.INSTAGRAM, Platform.FACEBOOK, Platform.YOUTUBE]
@@ -43,6 +44,12 @@ def test_update_checkpoint_when_pipeline_success(monkeypatch):
 
     def fake_call_command(*args, **kwargs):
         calls.append((args, kwargs))
+        for platform in ALL_SOCIAL:
+            DailyWorkflowRun.objects.update_or_create(
+                platform=platform,
+                run_date=timezone.localdate(),
+                defaults={"fetch_status": WorkflowStatus.SUCCESS},
+            )
         return True
 
     monkeypatch.setattr(ensure_daily_fetch_module, "call_command", fake_call_command)
@@ -113,6 +120,12 @@ def test_ensure_daily_fetch_runs_once_when_any_platform_missing(monkeypatch):
 
     def fake_call_command(*args, **kwargs):
         calls.append((args, kwargs))
+        for platform in [Platform.INSTAGRAM, Platform.FACEBOOK, Platform.YOUTUBE]:
+            DailyWorkflowRun.objects.update_or_create(
+                platform=platform,
+                run_date=today,
+                defaults={"fetch_status": WorkflowStatus.SUCCESS},
+            )
         return True
 
     monkeypatch.setattr(ensure_daily_fetch_module, "call_command", fake_call_command)
@@ -131,7 +144,60 @@ def test_ensure_daily_fetch_runs_once_when_any_platform_missing(monkeypatch):
 
 
 @pytest.mark.django_db
-def test_run_daily_pipeline_returns_status_string():
+def test_run_daily_pipeline_returns_status_string(monkeypatch):
+    monkeypatch.setattr(
+        pipeline_module.DeepSeekClient,
+        "from_env",
+        classmethod(lambda cls: (_ for _ in ()).throw(RuntimeError("skip ai"))),
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "generate_titles_basic",
+        lambda phrase, n=3: [{"template": "A", "title": f"{phrase} title", "caption": "caption"}],
+    )
+
     result = call_command("run_daily_pipeline", "--seed-demo")
+
+    assert result == "success"
+
+
+@pytest.mark.django_db
+def test_run_daily_pipeline_handles_same_phrase_text_across_platforms(monkeypatch):
+    for platform in ALL_SOCIAL:
+        Phrase.objects.create(text="quiet luxury", platform=platform, risk_level=RiskLevel.LOW)
+
+    def fake_collect(self, limit, region, failover_after_minutes):
+        return [
+            {
+                "platform": Platform.TIKTOK,
+                "region": region,
+                "external_id": "test-quiet-luxury",
+                "source_url": "https://example.com/quiet-luxury",
+                "title_text": "quiet luxury",
+                "caption_text": "quiet luxury",
+                "raw_metrics": {
+                    "views": 100000,
+                    "diggCount": 10000,
+                    "commentCount": 1000,
+                    "shareCount": 500,
+                },
+            }
+        ]
+
+    monkeypatch.setattr(pipeline_module.Command, "_collect_with_failover", fake_collect)
+    monkeypatch.setattr(pipeline_module, "extract_phrases_basic", lambda texts, top_k=200: ["quiet luxury"])
+    monkeypatch.setattr(pipeline_module, "extract_phrases_with_llm", lambda client, texts: [])
+    monkeypatch.setattr(
+        pipeline_module.DeepSeekClient,
+        "from_env",
+        classmethod(lambda cls: (_ for _ in ()).throw(RuntimeError("skip ai"))),
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "generate_titles_basic",
+        lambda phrase, n=3: [{"template": "A", "title": f"{phrase} title", "caption": "caption"}],
+    )
+
+    result = call_command("run_daily_pipeline", "--source", "official", "--limit", "20")
 
     assert result == "success"

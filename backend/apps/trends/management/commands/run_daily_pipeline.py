@@ -430,6 +430,7 @@ class Command(BaseCommand):
                         "explain": explain,
                         "url": snapshot.source_url,
                         "title": (snapshot.title_text or "")[:255],
+                        "platform": snapshot.platform or Platform.TIKTOK,
                     }
 
         for phrase_text in phrases:
@@ -438,7 +439,12 @@ class Command(BaseCommand):
                 continue
 
             phrase_risk = assess_risk(phrase_text)
-            phrase, _ = Phrase.objects.get_or_create(text=phrase_text, defaults={"risk_level": phrase_risk})
+            phrase_platform = metric.get("platform") or Platform.TIKTOK
+            phrase, _ = Phrase.objects.get_or_create(
+                text=phrase_text,
+                platform=phrase_platform,
+                defaults={"risk_level": phrase_risk},
+            )
             phrase.first_seen_at = phrase.first_seen_at or now
             phrase.last_seen_at = now
             phrase.risk_level = phrase_risk
