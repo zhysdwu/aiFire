@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.test import override_settings
 import pytest
+from rest_framework.test import APIClient
 
 from apps.trends.services.digital_human_video_service import (
     build_srt_content,
@@ -60,3 +61,55 @@ def test_generate_digital_human_video_returns_failed_when_ffmpeg_missing(tmp_pat
 
     assert result["status"] == "failed"
     assert "ffmpeg" in result["message"].lower()
+
+
+@pytest.mark.django_db
+def test_digital_human_video_create_rejects_short_script():
+    client = APIClient()
+    response = client.post(
+        "/api/digital-human/videos/",
+        {"script": "a", "audio_mode": "default", "video_mode": "default"},
+        format="multipart",
+    )
+    assert response.status_code == 400
+    assert "至少 2 个字" in response.data["message"]
+
+
+@pytest.mark.django_db
+def test_digital_human_video_create_success(monkeypatch):
+    client = APIClient()
+
+    def fake_generate(**kwargs):
+        return {
+            "job_id": "job-123",
+            "status": "success",
+            "engine": "ffmpeg_composite",
+            "video_url": "/media/digital_human/outputs/job-123.mp4",
+            "download_url": "/api/digital-human/videos/job-123/download/",
+            "message": "生成完成",
+        }
+
+    monkeypatch.setattr("apps.trends.api.digital_human_views.generate_digital_human_video", fake_generate)
+    response = client.post(
+        "/api/digital-human/videos/",
+        {"script": "生成一条视频", "audio_mode": "default", "video_mode": "default"},
+        format="multipart",
+    )
+    assert response.status_code == 200
+    assert response.data["status"] == "success"
+    assert response.data["download_url"] == "/api/digital-human/videos/job-123/download/"
+
+
+@pytest.mark.django_db
+def test_digital_human_video_download_returns_file(tmp_path, settings):
+    settings.MEDIA_ROOT = tmp_path
+    output_dir = tmp_path / "digital_human" / "outputs"
+    output_dir.mkdir(parents=True)
+    output_path = output_dir / "job-123.mp4"
+    output_path.write_bytes(b"fake mp4")
+
+    client = APIClient()
+    response = client.get("/api/digital-human/videos/job-123/download/")
+
+    assert response.status_code == 200
+    assert response["Content-Type"] == "video/mp4"

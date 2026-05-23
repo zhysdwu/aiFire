@@ -1,6 +1,10 @@
 ﻿from django.urls import path
 
-from apps.trends.api.digital_human_views import DigitalHumanChatView
+from apps.trends.api.digital_human_views import (
+    DigitalHumanChatView,
+    DigitalHumanVideoCreateView,
+    DigitalHumanVideoDownloadView,
+)
 from apps.trends.api.views import (
     PhraseReviewActionView,
     PhraseReviewListView,
@@ -20,6 +24,8 @@ from apps.trends.api.views import (
 
 urlpatterns = [
     path("digital-human/chat/", DigitalHumanChatView.as_view(), name="digital-human-chat"),
+    path("digital-human/videos/", DigitalHumanVideoCreateView.as_view(), name="digital-human-video-create"),
+    path("digital-human/videos/<str:job_id>/download/", DigitalHumanVideoDownloadView.as_view(), name="digital-human-video-download"),
     path("session-info/", SessionInfoView.as_view(), name="session-info"),
     path("review/phrases/", PhraseReviewListView.as_view(), name="review-phrase-list"),
     path("review/action/", PhraseReviewActionView.as_view(), name="review-phrase-action"),
