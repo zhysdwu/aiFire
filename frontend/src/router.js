@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from "vue-router";
 import HotwordsList from "./pages/HotwordsList.vue";
 import HotwordDetail from "./pages/HotwordDetail.vue";
+import DigitalHumanVideo from "./pages/DigitalHumanVideo.vue";
 import { fetchSessionInfo } from "./api/client";
 
 async function requireAdmin() {
@@ -13,6 +14,7 @@ const router = createRouter({
   routes: [
     { path: "/", component: HotwordsList, props: { mode: "public" } },
     { path: "/manage", component: HotwordsList, props: { mode: "admin" }, beforeEnter: requireAdmin },
+    { path: "/digital-human-video", component: DigitalHumanVideo },
     { path: "/hotwords/:id", component: HotwordDetail },
   ],
 });

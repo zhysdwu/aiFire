@@ -215,3 +215,31 @@ export async function triggerWorkflowStep(platform, step) {
   }
   return response.json();
 }
+
+export async function generateDigitalHumanVideo({
+  script,
+  audioMode = "default",
+  videoMode = "default",
+  audioFile = null,
+  videoFile = null,
+}) {
+  const formData = new FormData();
+  formData.set("script", script);
+  formData.set("audio_mode", audioMode);
+  formData.set("video_mode", videoMode);
+  if (audioFile) formData.set("audio_file", audioFile);
+  if (videoFile) formData.set("video_file", videoFile);
+
+  const csrfToken = readCookie("csrftoken");
+  const response = await fetch("/api/digital-human/videos/", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "X-CSRFToken": csrfToken },
+    body: formData,
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.message || payload.detail || "数字人视频生成失败");
+  }
+  return payload;
+}
