@@ -34,6 +34,8 @@ URLs:
 - Frontend: `http://127.0.0.1:5173/`
 - Backend API: `http://127.0.0.1:8000/api/phrases/?window=24h&sort=heat`
 - Digital Human chat: `http://127.0.0.1:8000/api/digital-human/chat/`
+- Digital Human video page: `http://127.0.0.1:5173/digital-human-video`
+- Digital Human video API: `http://127.0.0.1:8000/api/digital-human/videos/`
 - Django Admin: `http://127.0.0.1:8000/admin/`
 
 ## 每日自动抓取机制
