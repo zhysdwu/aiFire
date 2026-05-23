@@ -1,4 +1,4 @@
-from django.db.models import Avg
+from django.db.models import Avg, F, OuterRef, Subquery, F, OuterRef, Subquery
 from django.utils import timezone
 from django.utils.decorators import method_decorator
 from django.views.decorators.cache import never_cache
@@ -13,14 +13,14 @@ from apps.trends.api.serializers import (
     PhraseDetailSerializer,
     PhraseListSerializer,
 )
-from apps.trends.models import DeleteReasonType, GeneratedTitle, Phrase, PhraseDeleteLog, Platform, RiskLevel, Window
+from apps.trends.models import DeleteReasonType, GeneratedTitle, Phrase, PhraseDeleteLog, PhraseMetricWindow, Platform, RiskLevel, Window
 from apps.trends.services.analytics import build_analytics_overview
 from apps.trends.services.assistant import answer_assistant_question, normalize_platform
 from apps.trends.services.deepseek_client import DeepSeekClient
 from apps.trends.services.workflow import build_today_workflow_status
 
 
-SOCIAL_PLATFORMS = {Platform.TIKTOK, Platform.INSTAGRAM, Platform.FACEBOOK}
+SOCIAL_PLATFORMS = {Platform.TIKTOK, Platform.INSTAGRAM, Platform.FACEBOOK, Platform.YOUTUBE}
 
 
 def normalize_social_platform(value: str) -> str:
@@ -45,16 +45,22 @@ class PhraseListView(generics.ListAPIView):
         if risk in {RiskLevel.LOW, RiskLevel.MEDIUM, RiskLevel.HIGH}:
             qs = qs.filter(risk_level=risk)
 
-        qs = qs.exclude(risk_level=RiskLevel.BLOCKED)
+        qs = qs.exclude(risk_level__in=[RiskLevel.BLOCKED, RiskLevel.PENDING_REVIEW])
 
         if sort == "new":
             return qs.order_by("-created_at")
 
         if sort in {"heat", "growth", "ai"}:
-            qs = qs.filter(metrics__window=window)
+            metric_sq = PhraseMetricWindow.objects.filter(
+                phrase=OuterRef("pk"), window=window
+            )
+            qs = qs.annotate(
+                _heat_score=Subquery(metric_sq.values("heat_score")[:1]),
+                _growth=Subquery(metric_sq.values("growth_prev_window")[:1]),
+            )
             if sort in {"heat", "ai"}:
-                return qs.order_by("-metrics__heat_score").distinct()
-            return qs.order_by("-metrics__growth_prev_window").distinct()
+                return qs.order_by(F("_heat_score").desc(nulls_last=True))
+            return qs.order_by(F("_growth").desc(nulls_last=True))
 
         return qs.order_by("-created_at")
 
@@ -65,7 +71,7 @@ class PhraseListView(generics.ListAPIView):
 
 
 class PhraseDetailView(generics.RetrieveAPIView):
-    queryset = Phrase.objects.exclude(risk_level=RiskLevel.BLOCKED).filter(is_deleted=False).prefetch_related(
+    queryset = Phrase.objects.exclude(risk_level__in=[RiskLevel.BLOCKED, RiskLevel.PENDING_REVIEW]).filter(is_deleted=False).prefetch_related(
         "metrics", "evidences", "generated_titles"
     )
     serializer_class = PhraseDetailSerializer
@@ -76,7 +82,7 @@ class PlatformSummaryView(APIView):
 
     def get(self, request):
         platform = normalize_social_platform(request.query_params.get("platform", Platform.TIKTOK))
-        phrases = Phrase.objects.filter(is_deleted=False, platform=platform).exclude(risk_level=RiskLevel.BLOCKED)
+        phrases = Phrase.objects.filter(is_deleted=False, platform=platform).exclude(risk_level__in=[RiskLevel.BLOCKED, RiskLevel.PENDING_REVIEW])
         metrics = phrases.filter(metrics__window=Window.H24).aggregate(avg_heat=Avg("metrics__heat_score"))
         top_keywords = list(phrases.order_by("-last_seen_at", "-created_at").values_list("text", flat=True)[:5])
         last_updated_at = phrases.order_by("-last_seen_at").values_list("last_seen_at", flat=True).first()
@@ -234,3 +240,95 @@ class GeneratedTitleFeedbackView(APIView):
         item.save(update_fields=["title", "caption", "feedback_text", "ai_reply", "refined_count"])
 
         return Response(GeneratedTitleSerializer(item).data, status=status.HTTP_200_OK)
+
+
+class PhraseReviewListView(generics.ListAPIView):
+    """管理员查看待审核关键词列表"""
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [permissions.IsAdminUser]
+    serializer_class = PhraseListSerializer
+
+    def get_queryset(self):
+        return Phrase.objects.filter(
+            is_deleted=False, risk_level=RiskLevel.PENDING_REVIEW
+        ).order_by("-created_at")
+
+    def get_serializer_context(self):
+        ctx = super().get_serializer_context()
+        ctx["window"] = self.request.query_params.get("window", Window.H24)
+        return ctx
+
+
+class PhraseReviewActionView(APIView):
+    """管理员审核操作：通过或屏蔽"""
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [permissions.IsAdminUser]
+
+    def post(self, request):
+        phrase_ids = request.data.get("phrase_ids", [])
+        action = (request.data.get("action") or "").strip().lower()
+        if action not in ("approve", "block"):
+            return Response(
+                {"detail": "action must be approve or block"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not isinstance(phrase_ids, list) or not phrase_ids:
+            return Response(
+                {"detail": "phrase_ids is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        qs = Phrase.objects.filter(
+            id__in=phrase_ids, risk_level=RiskLevel.PENDING_REVIEW, is_deleted=False
+        )
+        if action == "approve":
+            updated = qs.update(risk_level=RiskLevel.LOW)
+        else:
+            updated = qs.update(risk_level=RiskLevel.BLOCKED)
+        return Response({"updated": updated}, status=status.HTTP_200_OK)
+
+class WorkflowConfigView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        from apps.trends.services.workflow import get_pipeline_config
+        return Response(get_pipeline_config())
+
+    def patch(self, request):
+        if not request.user or not request.user.is_authenticated or not request.user.is_staff:
+            return Response({"detail": "需要管理员权限"}, status=status.HTTP_403_FORBIDDEN)
+        from apps.trends.services.workflow import update_pipeline_config
+        config = request.data
+        if not isinstance(config, dict):
+            return Response({"detail": "配置格式错误"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(update_pipeline_config(config))
+
+class WorkflowTriggerView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        from apps.trends.models import WorkflowStatus
+        from apps.trends.services.workflow import mark_step
+
+        platform = (request.data.get("platform") or "").strip().lower()
+        step = (request.data.get("step") or "").strip().lower()
+        valid_steps = {"fetch", "extract", "recommend"}
+
+        if platform not in SOCIAL_PLATFORMS:
+            return Response({"detail": "不支持的平台"}, status=status.HTTP_400_BAD_REQUEST)
+        if step not in valid_steps:
+            return Response({"detail": "不支持的步骤"}, status=status.HTTP_400_BAD_REQUEST)
+
+        mark_step(platform, step, WorkflowStatus.RUNNING, f"手动触发 {step}")
+
+        try:
+            from io import StringIO
+            from django.core.management import call_command
+            out = StringIO()
+            call_command("run_daily_pipeline", platform=platform, step=step, stdout=out)
+            output = out.getvalue()
+            mark_step(platform, step, WorkflowStatus.SUCCESS, output[:255])
+            return Response({"status": "success", "platform": platform, "step": step, "message": output[:255]})
+        except Exception as exc:
+            mark_step(platform, step, WorkflowStatus.FAILED, str(exc)[:255])
+            return Response({"status": "failed", "platform": platform, "step": step, "message": str(exc)[:255]},
+                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)

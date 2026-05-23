@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from django.core.management import call_command
 from django.core.management.base import BaseCommand
@@ -36,20 +36,26 @@ class Command(BaseCommand):
         today = timezone.localdate()
         try:
             if not self._checkpoint_table_exists():
-                self.stdout.write(self.style.WARNING("未检测到每日检查点表，请先执行数据库迁移：python manage.py migrate"))
+                self.stdout.write(self.style.WARNING("鏈娴嬪埌姣忔棩妫€鏌ョ偣琛紝璇峰厛鎵ц鏁版嵁搴撹縼绉伙細python manage.py migrate"))
                 return False
             checkpoints = self._checkpoints()
         except (ProgrammingError, OperationalError):
-            self.stdout.write(self.style.WARNING("数据库结构尚未更新，请先执行数据库迁移：python manage.py migrate"))
+            self.stdout.write(self.style.WARNING("鏁版嵁搴撶粨鏋勫皻鏈洿鏂帮紝璇峰厛鎵ц鏁版嵁搴撹縼绉伙細python manage.py migrate"))
             return False
 
-        if all(checkpoint.last_success_date == today for checkpoint in checkpoints.values()):
+        all_done = all(checkpoint.last_success_date == today for checkpoint in checkpoints.values())
+        if all_done:
             self._mark_fetch_for_all(WorkflowStatus.SKIPPED, "今日已抓取成功，跳过。")
             self.stdout.write(self.style.SUCCESS(f"今日已抓取成功，跳过。日期：{today}"))
             return "skipped"
 
-        self._mark_fetch_for_all(WorkflowStatus.RUNNING, "今日尚未抓取成功，开始执行每日抓取。")
-        self.stdout.write(self.style.WARNING("今日尚未抓取成功，开始执行每日抓取..."))
+        for platform, checkpoint in checkpoints.items():
+            if checkpoint.last_success_date == today:
+                mark_step(platform, "fetch", WorkflowStatus.SKIPPED, "今日已抓取成功，跳过。")
+            else:
+                mark_step(platform, "fetch", WorkflowStatus.RUNNING, "今日尚未抓取成功，开始执行每日抓取。")
+
+        self.stdout.write(self.style.WARNING("今日尚未完全抓取成功，开始执行每日抓取..."))
         result = call_command(
             "run_daily_pipeline",
             "--limit",
@@ -64,14 +70,18 @@ class Command(BaseCommand):
 
         if bool(result):
             now = timezone.now()
-            for checkpoint in checkpoints.values():
-                checkpoint.last_success_date = today
-                checkpoint.last_success_at = now
-                checkpoint.save(update_fields=["last_success_date", "last_success_at", "updated_at"])
-            self._mark_fetch_for_all(WorkflowStatus.SUCCESS, "今日抓取成功。")
-            self.stdout.write(self.style.SUCCESS(f"今日抓取成功，检查点已更新：{today}"))
+            from apps.trends.models import DailyWorkflowRun, WorkflowStatus as WS
+            for platform, checkpoint in checkpoints.items():
+                run = DailyWorkflowRun.objects.filter(platform=platform, run_date=today).first()
+                if run and run.fetch_status == WS.SUCCESS:
+                    checkpoint.last_success_date = today
+                    checkpoint.last_success_at = now
+                    checkpoint.save(update_fields=["last_success_date", "last_success_at", "updated_at"])
+                    mark_step(platform, "fetch", WS.SUCCESS, "今日抓取成功。")
+            self.stdout.write(self.style.SUCCESS(f"今日抓取完成，检查点已更新：{today}"))
             return "success"
 
-        self._mark_fetch_for_all(WorkflowStatus.FAILED, "本次抓取未成功，检查点不更新。")
+        for platform in SOCIAL_PLATFORMS:
+            mark_step(platform, "fetch", WorkflowStatus.FAILED, "本次抓取未成功，检查点不更新。")
         self.stdout.write(self.style.WARNING("本次抓取未成功，检查点不更新。"))
         return "failed"

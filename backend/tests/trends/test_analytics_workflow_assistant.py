@@ -51,7 +51,7 @@ def test_analytics_overview_returns_all_social_platforms(api_client):
 
     assert response.status_code == 200
     platforms = {item["platform"] for item in response.data["platforms"]}
-    assert platforms == {"tiktok", "instagram", "facebook"}
+    assert platforms == {"tiktok", "instagram", "facebook", "youtube"}
     assert "comparison" in response.data
 
 
@@ -79,8 +79,8 @@ def test_workflow_status_returns_today_rows(api_client):
     response = api_client.get("/api/workflow/status/")
 
     assert response.status_code == 200
-    assert len(response.data["runs"]) == 3
-    assert {item["platform"] for item in response.data["runs"]} == {"tiktok", "instagram", "facebook"}
+    assert len(response.data["runs"]) == 4
+    assert {item["platform"] for item in response.data["runs"]} == {"tiktok", "instagram", "facebook", "youtube"}
 
 
 @pytest.mark.django_db
@@ -96,7 +96,50 @@ def test_assistant_chat_returns_fallback_without_api_key(api_client, monkeypatch
     assert response.status_code == 200
     assert response.data["intent"] in {"platform_compare", "general"}
     assert response.data["answer"]
+    assert response.data["ai_status"] == "fallback"
+    assert response.data["ai_error_code"] == "missing_api_key"
+    assert "DEEPSEEK_API_KEY" in response.data["ai_error_message"]
     assert AssistantMessageLog.objects.filter(platform=Platform.TIKTOK, question="Compare platforms").exists()
+
+
+@pytest.mark.django_db
+def test_assistant_chat_trend_question_uses_trend_intent_and_clean_fallback(api_client, monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+
+    response = api_client.post(
+        "/api/assistant/chat/",
+        {
+            "platform": "tiktok",
+            "question": "请对当前平台的热词趋势做简要分析，并给出适合内容创作者的标题方向。",
+        },
+        format="json",
+    )
+
+    assert response.status_code == 200
+    assert response.data["intent"] == "trend_analysis"
+    assert "TikTok" in response.data["answer"]
+    assert "DeepSeek 暂时不可用" not in response.data["answer"]
+
+
+@pytest.mark.django_db
+def test_assistant_chat_marks_deepseek_success(api_client, monkeypatch):
+    class FakeDeepSeekClient:
+        def chat_json(self, system: str, user: str) -> dict:
+            return {"answer": "DeepSeek 已完成趋势分析。", "suggestions": ["继续生成标题"]}
+
+    monkeypatch.setattr("apps.trends.services.assistant.DeepSeekClient.from_env", lambda: FakeDeepSeekClient())
+
+    response = api_client.post(
+        "/api/assistant/chat/",
+        {"platform": "instagram", "question": "分析这个平台"},
+        format="json",
+    )
+
+    assert response.status_code == 200
+    assert response.data["ai_status"] == "deepseek"
+    assert response.data["ai_error_code"] is None
+    assert response.data["answer"] == "DeepSeek 已完成趋势分析。"
+    assert response.data["suggestions"] == ["继续生成标题"]
 
 
 @pytest.mark.django_db
@@ -134,7 +177,7 @@ def test_phrase_soft_delete_rejects_non_admin_user(api_client):
 
 @pytest.mark.django_db
 def test_ensure_daily_fetch_marks_skipped_workflow_runs(monkeypatch):
-    for platform in [Platform.TIKTOK, Platform.INSTAGRAM, Platform.FACEBOOK]:
+    for platform in [Platform.TIKTOK, Platform.INSTAGRAM, Platform.FACEBOOK, Platform.YOUTUBE]:
         checkpoint = DailyFetchCheckpoint.get_for_platform(platform)
         checkpoint.last_success_date = timezone.localdate()
         checkpoint.last_success_at = timezone.now()
@@ -149,7 +192,7 @@ def test_ensure_daily_fetch_marks_skipped_workflow_runs(monkeypatch):
 
 @pytest.mark.django_db
 def test_ensure_daily_fetch_marks_success_workflow_runs(monkeypatch):
-    for platform in [Platform.TIKTOK, Platform.INSTAGRAM, Platform.FACEBOOK]:
+    for platform in [Platform.TIKTOK, Platform.INSTAGRAM, Platform.FACEBOOK, Platform.YOUTUBE]:
         DailyFetchCheckpoint.get_for_platform(platform)
 
     monkeypatch.setattr(ensure_daily_fetch_module, "call_command", lambda *args, **kwargs: True)
@@ -161,7 +204,7 @@ def test_ensure_daily_fetch_marks_success_workflow_runs(monkeypatch):
 
 @pytest.mark.django_db
 def test_ensure_daily_fetch_marks_failure_workflow_runs(monkeypatch):
-    for platform in [Platform.TIKTOK, Platform.INSTAGRAM, Platform.FACEBOOK]:
+    for platform in [Platform.TIKTOK, Platform.INSTAGRAM, Platform.FACEBOOK, Platform.YOUTUBE]:
         DailyFetchCheckpoint.get_for_platform(platform)
 
     monkeypatch.setattr(ensure_daily_fetch_module, "call_command", lambda *args, **kwargs: False)

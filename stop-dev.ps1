@@ -1,6 +1,6 @@
-$ErrorActionPreference = "SilentlyContinue"
+﻿$ErrorActionPreference = "SilentlyContinue"
 
-$ports = @(8000, 5173)
+$ports = @(8000, 5173, 8010)
 $netstatExe = "C:\Windows\System32\netstat.exe"
 $schedulerPidFile = "D:\aiFire\.tmp\scheduler.pid"
 
@@ -40,4 +40,4 @@ try {
     # 非管理员环境可能无权限读取 Win32_Process，忽略
 }
 
-Write-Host "Stopped processes on ports 8000 and 5173 (if any), and stopped scheduler process (if any)."
+Write-Host "Stopped processes on ports 8000, 5173, and 8010 (if any), and stopped scheduler process (if any)."

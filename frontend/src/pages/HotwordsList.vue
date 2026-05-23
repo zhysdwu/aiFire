@@ -1,4 +1,4 @@
-<script setup>
+﻿<script setup>
 import { computed, nextTick, ref, watchEffect } from "vue";
 import { RouterLink } from "vue-router";
 import {
@@ -8,10 +8,14 @@ import {
   fetchPhraseDeleteLogs,
   fetchSessionInfo,
   fetchWorkflowStatus,
+  fetchWorkflowConfig,
+  updateWorkflowConfig,
+  triggerWorkflowStep,
   sendAssistantQuestion,
   softDeletePhrase,
 } from "../api/client";
 import { useRouter } from "vue-router";
+import FloatingDigitalHuman from "../components/FloatingDigitalHuman.vue";
 
 const props = defineProps({
   mode: {
@@ -43,6 +47,9 @@ const deleteTarget = ref(null);
 const deleteReason = ref("");
 const deleteError = ref("");
 const deleteLoading = ref(false);
+const reviewPhrases = ref([]);
+const reviewLoading = ref(false);
+const reviewActionLoading = ref({});
 
 const assistantPhraseId = ref(null);
 const assistantContextLabel = ref("");
@@ -53,6 +60,9 @@ const assistantSuggestions = ref(["对比三个平台表现", "生成更适合�
 const assistantLoading = ref(false);
 const assistantError = ref("");
 const assistantPanel = ref(null);
+const pipelineConfig = ref({});
+const pipelineTriggerLoading = ref({});
+const pipelineStatusPollTimer = ref(null);
 
 const windowLabelMap = {
   "24h": "近24小时",
@@ -71,6 +81,13 @@ const platformLabelMap = {
   tiktok: "TikTok",
   instagram: "Instagram",
   facebook: "Facebook",
+  youtube: "YouTube",
+};
+
+const stepLabelMap = {
+  fetch: "📡 抓取",
+  extract: "🔍 提取",
+  recommend: "✅ 推荐",
 };
 
 const deleteReasonOptions = [
@@ -113,11 +130,72 @@ const comparisonSummary = computed(() => {
   return `当前平均热度领先平台：${highest}；关键词覆盖最多平台：${most}`;
 });
 
+async function loadPipelineConfig() {
+  try {
+    pipelineConfig.value = await fetchWorkflowConfig();
+  } catch {
+    // silent fail for non-admin
+  }
+}
+
+async function togglePlatform(platform) {
+  const cfg = { ...pipelineConfig.value };
+  if (!cfg[platform]) cfg[platform] = { enabled: true, steps: { fetch: true, extract: true, recommend: true } };
+  cfg[platform].enabled = !cfg[platform].enabled;
+  try {
+    pipelineConfig.value = await updateWorkflowConfig(cfg);
+  } catch (err) {
+    alert("更新配置失败：" + (err.message || "未知错误"));
+  }
+}
+
+async function triggerStep(platform, step) {
+  const key = platform + "_" + step;
+  pipelineTriggerLoading.value[key] = true;
+  try {
+    await triggerWorkflowStep(platform, step);
+  } catch (err) {
+    alert("触发 " + step + " 失败：" + (err.message || "未知错误"));
+  } finally {
+    pipelineTriggerLoading.value[key] = false;
+    startPollingWorkflow();
+  }
+}
+
+async function runAllPlatforms() {
+  const cfg = pipelineConfig.value;
+  const platforms = Object.keys(cfg).filter((p) => cfg[p] && cfg[p].enabled);
+  for (const platform of platforms) {
+    const steps = cfg[platform].steps || {};
+    if (steps.fetch !== false) await triggerStep(platform, "fetch");
+    if (steps.extract !== false) await triggerStep(platform, "extract");
+    if (steps.recommend !== false) await triggerStep(platform, "recommend");
+  }
+}
+
+function startPollingWorkflow() {
+  stopPollingWorkflow();
+  pipelineStatusPollTimer.value = setInterval(async () => {
+    try {
+      workflow.value = await fetchWorkflowStatus();
+    } catch {}
+  }, 3000);
+  setTimeout(stopPollingWorkflow, 120000);
+}
+
+function stopPollingWorkflow() {
+  if (pipelineStatusPollTimer.value) {
+    clearInterval(pipelineStatusPollTimer.value);
+    pipelineStatusPollTimer.value = null;
+  }
+}
+
 watchEffect(async () => {
   loading.value = true;
   error.value = "";
   sessionReady.value = false;
   try {
+    loadPipelineConfig();
     const [phrasePayload, summaryPayload, analyticsPayload, workflowPayload, sessionPayload] = await Promise.all([
       fetchPhrases({
         window: windowValue.value,
@@ -157,6 +235,8 @@ watchEffect(async () => {
     loading.value = false;
   }
 });
+
+
 
 function resetToFirstPage() {
   page.value = 1;
@@ -292,12 +372,12 @@ async function confirmDelete() {
     <section class="hero">
       <p class="hero-kicker">AI Trend Studio</p>
       <h1>多平台热词洞察台</h1>
-      <p class="hero-sub">按平台独立查看热词与推荐结果，支持 TikTok / Instagram / Facebook。</p>
+      <p class="hero-sub">按平台独立查看热词与推荐结果，支持 TikTok / Instagram / Facebook / YouTube。</p>
       <div class="hero-meta">
-        <span>{{ platformLabelMap[platformValue] }}</span>
-        <span>{{ windowLabelMap[windowValue] }}</span>
-        <span>{{ sortLabelMap[sortValue] }}</span>
-        <span>共 {{ total }} 条</span>
+        <span>平台：{{ platformLabelMap[platformValue] }}</span>
+        <span>时间：{{ windowLabelMap[windowValue] }}</span>
+        <span>排序：{{ sortLabelMap[sortValue] }}</span>
+        <span>共 {{ summary?.total_phrases ?? total }} 条</span>
       </div>
     </section>
 
@@ -334,6 +414,8 @@ async function confirmDelete() {
       <p v-else class="audit-empty">暂无删除记录</p>
     </section>
 
+
+
     <section class="filter-panel">
       <label>
         平台
@@ -341,6 +423,7 @@ async function confirmDelete() {
           <option value="tiktok">TikTok</option>
           <option value="instagram">Instagram</option>
           <option value="facebook">Facebook</option>
+          <option value="youtube">YouTube</option>
         </select>
       </label>
 
@@ -380,7 +463,7 @@ async function confirmDelete() {
       </div>
       <div class="summary-card">
         <div>最近更新</div>
-        <strong>{{ summary.last_updated_at || "-" }}</strong>
+        <strong>{{ summary.last_updated_at ? formatDateTime(summary.last_updated_at) : "-" }}</strong>
       </div>
     </section>
 
@@ -531,6 +614,8 @@ async function confirmDelete() {
       </div>
     </section>
   </main>
+
+    <FloatingDigitalHuman :platform="platformValue" />
 </template>
 
 <style scoped>
@@ -646,6 +731,47 @@ textarea { resize: vertical; color: var(--ink-strong); }
 .btn-cancel, .btn-confirm { border-radius: 10px; padding: 7px 12px; border: 1px solid #c5b295; cursor: pointer; }
 .btn-cancel { background: #fff7e8; color: #5e4a2d; }
 .btn-confirm { background: #8f2d21; border-color: #8f2d21; color: #fff; }
+.workflow-panel { background: linear-gradient(160deg, #1a2e2b 0%, #142120 100%); color: #f9f1df; }
+.workflow-panel .board-heading { margin-bottom: 10px; }
+.workflow-panel .board-heading h2 { color: #fff8e8; }
+.workflow-panel .board-heading .section-kicker { color: #8bc4bb; }
+.workflow-panel .status { color: #b0a897; }
+.btn-run-all { border: 1px solid #7bcfc4; border-radius: 10px; background: #e8fffb; color: #0d5d57; padding: 7px 12px; font-weight: 700; cursor: pointer; font-size: 13px; }
+.btn-run-all:hover { background: #c8f7ef; }
+.workflow-platforms { display: grid; gap: 10px; }
+.workflow-platform-row { border: 1px solid rgba(255,255,255,.14); border-radius: 12px; padding: 10px; background: rgba(255,255,255,.05); }
+.workflow-platform-row.platform-disabled { opacity: .45; }
+.platform-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.platform-name { font-weight: 800; font-size: 14px; }
+.platform-toggle { display: flex; align-items: center; gap: 5px; cursor: pointer; font-size: 12px; }
+.platform-toggle input { width: auto; margin: 0; }
+.toggle-label { color: #8bc4bb; user-select: none; }
+.step-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.step-card { border: 1px solid rgba(255,255,255,.12); border-radius: 10px; padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; background: rgba(255,255,255,.04); }
+.step-card.step-success { border-color: rgba(129,199,132,.6); }
+.step-card.step-running { border-color: rgba(100,181,246,.6); animation: pulse-border 1s infinite; }
+.step-card.step-failed { border-color: rgba(229,115,115,.6); }
+.step-icon { font-size: 16px; font-weight: 900; }
+.step-success .step-icon { color: #81c784; }
+.step-running .step-icon { color: #64b5f6; }
+.step-failed .step-icon { color: #e57373; }
+.step-skipped .step-icon { color: #9e9e9e; }
+.step-body { display: flex; flex-direction: column; }
+.step-label { font-size: 12px; color: #b0a897; }
+.step-status { font-size: 11px; font-weight: 700; }
+.step-success .step-status { color: #a5d6a7; }
+.step-running .step-status { color: #90caf9; }
+.step-failed .step-status { color: #ef9a9a; }
+.step-skipped .step-status { color: #9e9e9e; }
+.btn-step-trigger { margin-top: 4px; border: 1px solid rgba(255,255,255,.2); border-radius: 6px; background: rgba(255,255,255,.08); color: #c8e6c9; padding: 3px 6px; font-size: 11px; cursor: pointer; }
+.btn-step-trigger:hover { background: rgba(255,255,255,.16); }
+.btn-step-trigger:disabled { opacity: .5; cursor: wait; }
+@keyframes pulse-border {
+  0%, 100% { border-color: rgba(100,181,246,.6); }
+  50% { border-color: rgba(100,181,246,.25); }
+}
+
+
 @media (max-width: 860px) {
   .filter-panel, .summary-panel, .intelligence-board { grid-template-columns: 1fr; }
   .board-card-wide { grid-row: auto; }

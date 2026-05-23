@@ -6,6 +6,11 @@ import vueDevTools from "vite-plugin-vue-devtools";
 
 export default defineConfig({
   plugins: [vue(), vueDevTools()],
+  build: {
+    rollupOptions: {
+      input: "index.html",
+    },
+  },
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),

@@ -5,7 +5,7 @@ from django.db.models import Avg
 from apps.trends.models import Phrase, Platform, RiskLevel, Window
 
 
-SOCIAL_PLATFORMS = [Platform.TIKTOK, Platform.INSTAGRAM, Platform.FACEBOOK]
+SOCIAL_PLATFORMS = [Platform.TIKTOK, Platform.INSTAGRAM, Platform.FACEBOOK, Platform.YOUTUBE]
 
 
 def build_analytics_overview() -> dict:

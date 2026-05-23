@@ -12,13 +12,38 @@ $schedulerOut = "D:\aiFire\.tmp\scheduler.out.log"
 $schedulerErr = "D:\aiFire\.tmp\scheduler.err.log"
 $schedulerPidFile = "D:\aiFire\.tmp\scheduler.pid"
 
-Remove-Item -LiteralPath $backendOut, $backendErr, $frontendOut, $frontendErr, $schedulerOut, $schedulerErr -ErrorAction SilentlyContinue
+$ltOut = "D:\aiFire\.tmp\livetalking.out.log"
+$ltErr = "D:\aiFire\.tmp\livetalking.err.log"
+$ltPidFile = "D:\aiFire\.tmp\livetalking.pid"
+
+Remove-Item -LiteralPath $backendOut, $backendErr, $frontendOut, $frontendErr, $schedulerOut, $schedulerErr, $ltOut, $ltErr -ErrorAction SilentlyContinue
 
 $netstatExe = "C:\Windows\System32\netstat.exe"
 
 # Normalize duplicated environment key names for Start-Process in this session.
 if ((Test-Path Env:PATH) -and (Test-Path Env:Path)) {
     Remove-Item Env:PATH -ErrorAction SilentlyContinue
+}
+
+function Load-DotEnvFile($filePath) {
+    if (-not (Test-Path $filePath)) { return }
+    $lines = Get-Content -Path $filePath -ErrorAction SilentlyContinue
+    foreach ($line in $lines) {
+        $raw = ($line | Out-String).Trim()
+        if (-not $raw) { continue }
+        if ($raw.StartsWith("#")) { continue }
+        $parts = $raw.Split("=", 2)
+        if ($parts.Count -ne 2) { continue }
+        $key = $parts[0].Trim()
+        $value = $parts[1].Trim()
+        if (-not $key) { continue }
+        if (($value.StartsWith("'") -and $value.EndsWith("'")) -or ($value.StartsWith('"') -and $value.EndsWith('"'))) {
+            $value = $value.Substring(1, $value.Length - 2)
+        }
+        if (-not [string]::IsNullOrWhiteSpace($key) -and -not (Test-Path ("Env:" + $key))) {
+            Set-Item -Path ("Env:" + $key) -Value $value
+        }
+    }
 }
 
 function Stop-PortProcess($port) {
@@ -72,10 +97,16 @@ function Wait-HttpOk($url, $seconds = 12) {
 }
 
 $env:USE_SQLITE = "0"
+Load-DotEnvFile "D:\aiFire\.env.local"
+Load-DotEnvFile "D:\aiFire\backend\.env.local"
+if ([string]::IsNullOrWhiteSpace($env:APIFY_TOKEN)) {
+    Write-Host "警告: 未检测到 APIFY_TOKEN，Apify 采集将不可用。请在 D:\aiFire\.env.local 中配置。"
+}
 
 # Always free expected ports before launching.
 Stop-PortProcess 8000
 Stop-PortProcess 5173
+Stop-PortProcess 8010
 Stop-SchedulerProcess
 
 $backend = Start-Process `
@@ -94,6 +125,15 @@ $frontend = Start-Process `
     -WindowStyle Hidden `
     -RedirectStandardOutput $frontendOut `
     -RedirectStandardError $frontendErr `
+    -PassThru
+
+$livetalking = Start-Process `
+    -FilePath "D:\aiFire\.venv\Scripts\pythonw.exe" `
+    -ArgumentList "D:\aiFire\tools\livetalking_stub.py" `
+    -WorkingDirectory "D:\aiFire" `
+    -WindowStyle Hidden `
+    -RedirectStandardOutput $ltOut `
+    -RedirectStandardError $ltErr `
     -PassThru
 
 Start-Sleep -Seconds 2
@@ -115,6 +155,7 @@ if (-not (Wait-HttpOk "http://127.0.0.1:8000/admin/login/" 10)) {
 
 $backendOk = Wait-HttpOk "http://127.0.0.1:8000/admin/login/" 8
 $frontendOk = Wait-HttpOk "http://127.0.0.1:5173/" 8
+$ltOk = Wait-HttpOk "http://127.0.0.1:8010/health" 5
 
 if ($backendOk) {
     Write-Host "执行数据库迁移检查..."
@@ -143,20 +184,26 @@ if ($backendOk) {
         -RedirectStandardError $schedulerErr `
         -PassThru
     Set-Content -Path $schedulerPidFile -Value "$($scheduler.Id)"
+    Set-Content -Path $ltPidFile -Value "$($livetalking.Id)"
 }
 
 Write-Host "Backend PID: $($backend.Id)"
 Write-Host "Frontend PID: $($frontend.Id)"
+Write-Host "LiveTalking PID:  $($livetalking.Id)"
 if ($scheduler) { Write-Host "Scheduler PID: $($scheduler.Id)" }
 Write-Host "Backend URL:  http://127.0.0.1:8000/"
 Write-Host "Frontend URL: http://127.0.0.1:5173/"
+Write-Host "LiveTalking URL:  http://127.0.0.1:8010/ (模拟端点)"
 Write-Host "Backend Health: $backendOk"
 Write-Host "Frontend Health: $frontendOk"
+Write-Host "LiveTalking Stub: $ltOk"
 Write-Host "Logs:"
 Write-Host "  $backendOut"
 Write-Host "  $backendErr"
 Write-Host "  $frontendOut"
 Write-Host "  $frontendErr"
+Write-Host "  $ltOut"
+Write-Host "  $ltErr"
 if ($scheduler) {
     Write-Host "  $schedulerOut"
     Write-Host "  $schedulerErr"

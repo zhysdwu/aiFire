@@ -59,11 +59,21 @@ class PhraseAdmin(admin.ModelAdmin):
     )
     search_fields = ("text",)
     list_filter = ("risk_level", "language", "category", "is_deleted", "deleted_reason_type")
-    actions = ["soft_delete_selected"]
+    actions = ["soft_delete_selected", "approve_review_selected", "block_review_selected"]
 
     @admin.action(description="逻辑删除所选关键词（需填写理由）")
     def soft_delete_selected(self, request, queryset):
         active_qs = queryset.filter(is_deleted=False)
+
+    @admin.action(description="审核通过（→安全）")
+    def approve_review_selected(self, request, queryset):
+        count = queryset.filter(risk_level="pending_review").update(risk_level="low")
+        self.message_user(request, f"已通过 {count} 个待审核词", level=messages.SUCCESS)
+
+    @admin.action(description="屏蔽（→违规）")
+    def block_review_selected(self, request, queryset):
+        count = queryset.filter(risk_level="pending_review").update(risk_level="blocked")
+        self.message_user(request, f"已屏蔽 {count} 个待审核词", level=messages.SUCCESS)
         if "apply" in request.POST:
             form = PhraseSoftDeleteForm(request.POST)
             if form.is_valid():

@@ -40,3 +40,4 @@ Thumbs.db
 # Project local tools/work dirs
 .superpowers/
 .agents/
+tools/LiveTalking/

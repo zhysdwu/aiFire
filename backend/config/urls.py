@@ -17,12 +17,13 @@ Including another URLconf
 from django.contrib import admin
 from django.shortcuts import redirect
 from django.urls import include, path
-from apps.trends.views_admin import delete_logs_view, source_status_view
+from apps.trends.views_admin import delete_logs_view, review_phrases_view, source_status_view
 
 urlpatterns = [
     path("", lambda request: redirect("http://127.0.0.1:5173/", permanent=False)),
     path("admin/source-status/", source_status_view, name="admin-source-status"),
     path("admin/delete-logs/", delete_logs_view, name="admin-delete-logs"),
+    path("admin/review/", review_phrases_view, name="admin-review-phrases"),
     path("admin/", admin.site.urls),
     path("api/", include("apps.trends.api.urls")),
 ]

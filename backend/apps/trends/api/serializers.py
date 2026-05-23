@@ -45,9 +45,12 @@ class PhraseListSerializer(serializers.ModelSerializer):
         if not window:
             return None
         metric = obj.metrics.filter(window=window).first()
-        if not metric:
-            return None
-        return PhraseMetricWindowSerializer(metric).data
+        if metric:
+            return PhraseMetricWindowSerializer(metric).data
+        fallback = obj.metrics.order_by("-computed_at").first()
+        if fallback:
+            return PhraseMetricWindowSerializer(fallback).data
+        return None
 
     def get_can_delete(self, obj: Phrase) -> bool:
         user = self.context.get("request").user if self.context.get("request") else None

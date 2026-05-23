@@ -7,6 +7,7 @@ class Platform(models.TextChoices):
     TIKTOK = "tiktok", "TikTok"
     INSTAGRAM = "instagram", "Instagram"
     FACEBOOK = "facebook", "Facebook"
+    YOUTUBE = "youtube", "YouTube"
     GOOGLE_TRENDS = "gtrends", "Google Trends"
     ANSWER_THE_PUBLIC = "atp", "AnswerThePublic"
 
@@ -16,6 +17,7 @@ class RiskLevel(models.TextChoices):
     MEDIUM = "medium", "Medium"
     HIGH = "high", "High"
     BLOCKED = "blocked", "Blocked"
+    PENDING_REVIEW = "pending_review", "Pending Review"
 
 
 class Window(models.TextChoices):
@@ -202,5 +204,26 @@ class AssistantMessageLog(models.Model):
         blank=True,
         on_delete=models.SET_NULL,
         related_name="assistant_message_logs",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class DigitalHumanSessionLog(models.Model):
+    platform = models.CharField(max_length=16, choices=Platform.choices, default=Platform.TIKTOK)
+    phrase = models.ForeignKey(Phrase, null=True, blank=True, on_delete=models.SET_NULL, related_name="digital_human_logs")
+    question = models.TextField()
+    answer = models.TextField()
+    intent = models.CharField(max_length=32, choices=AssistantIntent.choices, default=AssistantIntent.GENERAL)
+    provider = models.CharField(max_length=32, default="fallback")
+    session_id = models.CharField(max_length=128, blank=True, default="")
+    trace_id = models.CharField(max_length=64, db_index=True)
+    livetalking_status = models.CharField(max_length=16, default="skipped")
+    livetalking_message = models.TextField(blank=True, default="")
+    created_by = models.ForeignKey(
+        "auth.User",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="digital_human_session_logs",
     )
     created_at = models.DateTimeField(auto_now_add=True)

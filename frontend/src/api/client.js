@@ -120,7 +120,98 @@ export async function sendAssistantQuestion({ platform = "tiktok", phraseId = nu
   return response.json();
 }
 
+export async function digitalHumanChat({ platform = "tiktok", phraseId = null, sessionId = "", question }) {
+  const response = await fetch("/api/digital-human/chat/", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: csrfHeaders(),
+    body: JSON.stringify({
+      platform,
+      phrase_id: phraseId,
+      session_id: sessionId,
+      question,
+    }),
+  });
+  if (!response.ok) {
+    let message = "数字人暂时不可用";
+    try {
+      const data = await response.json();
+      message = data.detail || data.message || message;
+    } catch {}
+    throw new Error(message);
+  }
+  return response.json();
+}
+
+export async function fetchReviewPhrases() {
+  const response = await fetch("/api/review/phrases/", { credentials: "same-origin" });
+  if (!response.ok) {
+    return { count: 0, results: [] };
+  }
+  return response.json();
+}
+
+export async function reviewPhraseAction(phraseIds, action) {
+  const response = await fetch("/api/review/action/", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: csrfHeaders(),
+    body: JSON.stringify({ phrase_ids: phraseIds, action }),
+  });
+  if (!response.ok) {
+    let message = "操作失败";
+    try {
+      const data = await response.json();
+      message = data.detail || message;
+    } catch {}
+    throw new Error(message);
+  }
+  return response.json();
+}
+
 export function pickMetric(metrics, window = "24h") {
   if (!Array.isArray(metrics)) return null;
   return metrics.find((item) => item.window === window) || metrics[0] || null;
+}
+
+export async function fetchWorkflowConfig() {
+  const response = await fetch("/api/workflow/config/", { credentials: "same-origin" });
+  if (!response.ok) throw new Error("获取管道配置失败");
+  return response.json();
+}
+
+export async function updateWorkflowConfig(config) {
+  const response = await fetch("/api/workflow/config/", {
+    method: "PATCH",
+    credentials: "same-origin",
+    headers: csrfHeaders(),
+    body: JSON.stringify(config),
+  });
+  if (!response.ok) {
+    let message = "更新管道配置失败";
+    try {
+      const data = await response.json();
+      message = data.detail || data.message || message;
+    } catch {}
+    throw new Error(message);
+  }
+  return response.json();
+}
+
+export async function triggerWorkflowStep(platform, step) {
+  const response = await fetch("/api/workflow/trigger/", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: csrfHeaders(),
+    body: JSON.stringify({ platform, step }),
+  });
+  if (!response.ok) {
+    let message = "触发步骤失败";
+    try {
+      const data = await response.json();
+      message = data.detail || data.message || message;
+    } catch {}
+    throw new Error(message);
+  }
+  return response.json();
 }

@@ -64,6 +64,19 @@ def _score_explain(snapshot: TikTokRawSnapshot) -> str:
     return f"{source_name}数据：播放{views}、点赞{likes}、评论{comments}综合计算。"
 
 
+def _clean_explain(text):
+    if not text:
+        return text
+    while text and text[0] == "?":
+        idx = text.find(": ")
+        if idx != -1:
+            text = text[idx + 2:]
+        else:
+            break
+    return text
+
+
+
 def _unique_snapshots(items: list[dict], limit: int) -> list[dict]:
     seen: set[tuple[str, str]] = set()
     out: list[dict] = []
@@ -469,7 +482,8 @@ class Command(BaseCommand):
                     "heat_score": metric["score"],
                     "growth_prev_window": growth_prev,
                     "growth_vs_7d_avg": growth_7d,
-                    "score_explain": metric["explain"] if use_ai else f"规则评分: {metric['explain']}",
+                    "score_explain": _clean_explain(metric["explain"] if use_ai else f"规则评分: {metric['explain']}"),
+
                 },
             )
 
