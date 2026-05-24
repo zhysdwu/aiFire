@@ -6,6 +6,7 @@ from rest_framework.test import APIClient
 from apps.trends.services.digital_human_video_service import (
     build_srt_content,
     DigitalHumanVideoError,
+    find_ffmpeg_binary,
     generate_digital_human_video,
     validate_generation_request,
 )
@@ -42,6 +43,22 @@ def test_build_srt_content_escapes_blank_script():
     assert "1" in content
     assert "00:00:00,000 --> 00:00:08,000" in content
     assert "第一句 第二句" in content
+
+
+def test_find_ffmpeg_binary_uses_local_tools_fallback(tmp_path, monkeypatch):
+    local_tools = tmp_path / "tools" / "ffmpeg" / "unzipped" / "build" / "bin"
+    local_tools.mkdir(parents=True)
+    ffmpeg = local_tools / "ffmpeg.exe"
+    ffmpeg.write_text("fake", encoding="utf-8")
+
+    monkeypatch.delenv("FFMPEG_BINARY", raising=False)
+    monkeypatch.setattr("apps.trends.services.digital_human_video_service.shutil.which", lambda name: None)
+    monkeypatch.setattr(
+        "apps.trends.services.digital_human_video_service.local_ffmpeg_roots",
+        lambda: [tmp_path / "tools" / "ffmpeg"],
+    )
+
+    assert find_ffmpeg_binary() == str(ffmpeg)
 
 
 @override_settings(MEDIA_URL="/media/")

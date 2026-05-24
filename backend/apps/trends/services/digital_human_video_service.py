@@ -62,11 +62,34 @@ def build_srt_content(script: str) -> str:
     return f"1\n00:00:00,000 --> 00:00:08,000\n{clean_script}\n"
 
 
+def local_ffmpeg_roots() -> list[Path]:
+    project_root = Path(settings.BASE_DIR).parent
+    return [
+        project_root / "_tools" / "ffmpeg",
+        project_root.parent / "_tools" / "ffmpeg",
+        Path("D:/openaiskillnew/_tools/ffmpeg"),
+    ]
+
+
+def find_local_ffmpeg_binary() -> str | None:
+    executable_name = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
+    for root in local_ffmpeg_roots():
+        if not root.exists():
+            continue
+        direct = root / executable_name
+        if direct.exists():
+            return str(direct)
+        matches = sorted(root.rglob(executable_name))
+        if matches:
+            return str(matches[0])
+    return None
+
+
 def find_ffmpeg_binary() -> str | None:
     configured = os.getenv("FFMPEG_BINARY", "").strip()
     if configured and Path(configured).exists():
         return configured
-    return shutil.which("ffmpeg")
+    return shutil.which("ffmpeg") or find_local_ffmpeg_binary()
 
 
 def ensure_dirs(paths: GenerationPaths) -> None:
