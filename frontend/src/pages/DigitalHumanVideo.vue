@@ -9,6 +9,7 @@ const audioFile = ref(null);
 const videoFile = ref(null);
 const configs = ref([]);
 const selectedConfigId = ref("");
+const alibabaApiKey = ref("");
 const configError = ref("");
 const loading = ref(false);
 const error = ref("");
@@ -56,6 +57,7 @@ async function submitVideo() {
       audioFile: audioMode.value === "upload" ? audioFile.value : null,
       videoFile: videoMode.value === "upload" ? videoFile.value : null,
       configId: submittedConfigId.value,
+      alibabaApiKey: isAlibabaWanxiang.value ? alibabaApiKey.value.trim() : "",
     });
   } catch (err) {
     error.value = err.message || "数字人视频生成失败";
@@ -92,6 +94,15 @@ onMounted(loadConfigs);
           <p v-if="isAlibabaWanxiang" class="config-hint">
             阿里万相会从视频素材提取首帧作为数字人人像；默认音频会用脚本文本生成语音。
           </p>
+          <label v-if="isAlibabaWanxiang" class="api-key-field">
+            阿里云 API Key
+            <input
+              v-model="alibabaApiKey"
+              type="password"
+              autocomplete="off"
+              placeholder="留空则使用后台配置的 API Key"
+            />
+          </label>
           <p v-if="configError" class="config-error">{{ configError }}</p>
         </div>
 
@@ -185,6 +196,14 @@ onMounted(loadConfigs);
   gap: 8px;
   color: var(--ink-soft);
   font-size: 14px;
+  font-weight: 800;
+}
+
+.api-key-field {
+  display: grid;
+  gap: 8px;
+  color: var(--ink-soft);
+  font-size: 13px;
   font-weight: 800;
 }
 

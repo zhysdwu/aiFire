@@ -324,7 +324,9 @@ def generate_local_ffmpeg_video(*, script: str, audio_mode: str, video_mode: str
     return result_with_engine_config(result, engine="ffmpeg_composite", engine_config=engine_config)
 
 
-def generate_digital_human_video(*, script: str, audio_mode: str, video_mode: str, files, config_id=None) -> dict:
+def generate_digital_human_video(
+    *, script: str, audio_mode: str, video_mode: str, files, config_id=None, api_key_override: str = ""
+) -> dict:
     validate_generation_request(script=script, audio_mode=audio_mode, video_mode=video_mode, files=files)
     from apps.trends.services.digital_human_engines import get_engine_adapter, resolve_engine_config
 
@@ -336,4 +338,5 @@ def generate_digital_human_video(*, script: str, audio_mode: str, video_mode: st
         video_mode=video_mode,
         files=files,
         config=config,
+        api_key_override=(api_key_override or "").strip(),
     )

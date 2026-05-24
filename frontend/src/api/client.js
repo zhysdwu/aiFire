@@ -232,6 +232,7 @@ export async function generateDigitalHumanVideo({
   audioFile = null,
   videoFile = null,
   configId = null,
+  alibabaApiKey = "",
 }) {
   const formData = new FormData();
   formData.set("script", script);
@@ -241,6 +242,9 @@ export async function generateDigitalHumanVideo({
   if (videoFile) formData.set("video_file", videoFile);
   if (configId !== null && configId !== undefined && configId !== "") {
     formData.set("config_id", String(configId));
+  }
+  if (alibabaApiKey) {
+    formData.set("alibaba_api_key", alibabaApiKey);
   }
 
   const csrfToken = readCookie("csrftoken");

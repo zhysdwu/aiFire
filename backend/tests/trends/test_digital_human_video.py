@@ -569,6 +569,86 @@ def test_alibaba_wanxiang_generation_uses_configured_avatar_url_without_ffmpeg(t
     assert captured["avatar_image_path"] is None
 
 
+@pytest.mark.django_db
+def test_alibaba_wanxiang_generation_uses_request_api_key_without_saving(tmp_path, monkeypatch):
+    config = DigitalHumanEngineConfig.objects.create(
+        name="Alibaba Wanxiang runtime key",
+        engine_type=DigitalHumanEngineConfig.EngineType.ALIBABA_WANXIANG,
+        is_enabled=True,
+        is_default=True,
+        api_key="",
+        avatar_id="https://cdn.example.test/avatar.png",
+    )
+    media_root = tmp_path / "digital_human"
+    captured = {}
+
+    class FakeWanxiangClient:
+        def __init__(self, settings, session=None, sleep_func=None):
+            captured["settings"] = settings
+
+        def generate_video(self, *, script, audio_mode, audio_path, avatar_image_path=None, avatar_image_url="", output_path):
+            output_path.write_bytes(b"generated-mp4")
+            return {"task_id": "task-runtime-key", "source_video_url": "https://example.test/result.mp4"}
+
+    monkeypatch.setattr(
+        "apps.trends.services.digital_human_video_service.digital_human_media_root",
+        lambda: media_root,
+    )
+    monkeypatch.setattr(
+        "apps.trends.services.alibaba_wanxiang_client.AlibabaWanxiangClient",
+        FakeWanxiangClient,
+    )
+
+    result = generate_digital_human_video(
+        script="Generate a digital human video",
+        audio_mode="default",
+        video_mode="default",
+        files={},
+        config_id=str(config.id),
+        api_key_override="sk-runtime",
+    )
+
+    assert result["status"] == "success"
+    assert captured["settings"].api_key == "sk-runtime"
+    config.refresh_from_db()
+    assert config.api_key == ""
+
+
+@pytest.mark.django_db
+def test_digital_human_video_create_passes_alibaba_api_key_override(monkeypatch):
+    client = APIClient()
+    captured = {}
+
+    def fake_generate(**kwargs):
+        captured.update(kwargs)
+        return {
+            "job_id": "job-runtime-key",
+            "status": "success",
+            "engine": "alibaba_wanxiang",
+            "video_url": "/media/digital_human/outputs/job-runtime-key.mp4",
+            "download_url": "/api/digital-human/videos/job-runtime-key/download/",
+            "message": "ok",
+        }
+
+    monkeypatch.setattr("apps.trends.api.digital_human_views.generate_digital_human_video", fake_generate)
+
+    response = client.post(
+        "/api/digital-human/videos/",
+        {
+            "script": "Generate a digital human video",
+            "audio_mode": "default",
+            "video_mode": "default",
+            "config_id": "12",
+            "alibaba_api_key": "sk-runtime",
+        },
+        format="multipart",
+    )
+
+    assert response.status_code == 200
+    assert captured["config_id"] == "12"
+    assert captured["api_key_override"] == "sk-runtime"
+
+
 def test_alibaba_wanxiang_client_submits_polls_and_downloads(tmp_path):
     from apps.trends.services.alibaba_wanxiang_client import AlibabaWanxiangClient, AlibabaWanxiangSettings
 

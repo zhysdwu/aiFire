@@ -42,6 +42,7 @@ class DigitalHumanVideoCreateView(APIView):
                 video_mode=request.data.get("video_mode") or "default",
                 files=request.FILES,
                 config_id=request.data.get("config_id"),
+                api_key_override=request.data.get("alibaba_api_key"),
             )
         except DigitalHumanVideoError as exc:
             return Response({"status": "failed", "message": exc.message}, status=exc.status_code)

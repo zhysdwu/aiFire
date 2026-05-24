@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Protocol
 
 from apps.trends.models import DigitalHumanEngineConfig
@@ -78,12 +79,12 @@ def engine_config_to_public_dict(config) -> dict:
 
 
 class DigitalHumanEngineAdapter(Protocol):
-    def generate(self, *, script: str, audio_mode: str, video_mode: str, files, config) -> dict:
+    def generate(self, *, script: str, audio_mode: str, video_mode: str, files, config, api_key_override: str = "") -> dict:
         ...
 
 
 class LocalFfmpegEngineAdapter:
-    def generate(self, *, script: str, audio_mode: str, video_mode: str, files, config) -> dict:
+    def generate(self, *, script: str, audio_mode: str, video_mode: str, files, config, api_key_override: str = "") -> dict:
         from apps.trends.services.digital_human_video_service import generate_local_ffmpeg_video
 
         return generate_local_ffmpeg_video(
@@ -96,7 +97,7 @@ class LocalFfmpegEngineAdapter:
 
 
 class JimengVisualEngineAdapter:
-    def generate(self, *, script: str, audio_mode: str, video_mode: str, files, config) -> dict:
+    def generate(self, *, script: str, audio_mode: str, video_mode: str, files, config, api_key_override: str = "") -> dict:
         payload = {
             "status": "failed",
             "engine": DigitalHumanEngineConfig.EngineType.JIMENG_VISUAL,
@@ -108,7 +109,7 @@ class JimengVisualEngineAdapter:
 
 
 class TalkingAvatarEngineAdapter:
-    def generate(self, *, script: str, audio_mode: str, video_mode: str, files, config) -> dict:
+    def generate(self, *, script: str, audio_mode: str, video_mode: str, files, config, api_key_override: str = "") -> dict:
         payload = {
             "status": "failed",
             "engine": DigitalHumanEngineConfig.EngineType.TALKING_AVATAR,
@@ -120,7 +121,7 @@ class TalkingAvatarEngineAdapter:
 
 
 class AlibabaWanxiangEngineAdapter:
-    def generate(self, *, script: str, audio_mode: str, video_mode: str, files, config) -> dict:
+    def generate(self, *, script: str, audio_mode: str, video_mode: str, files, config, api_key_override: str = "") -> dict:
         from apps.trends.services.alibaba_wanxiang_client import (
             AlibabaWanxiangClient,
             settings_from_engine_config,
@@ -143,8 +144,17 @@ class AlibabaWanxiangEngineAdapter:
             "engine": DigitalHumanEngineConfig.EngineType.ALIBABA_WANXIANG,
             "engine_config": engine_config_to_public_dict(config),
         }
-        if not (config.api_key or "").strip():
+        effective_api_key = (api_key_override or config.api_key or "").strip()
+        if not effective_api_key:
             return {**payload, "message": "Alibaba Wanxiang API Key is required."}
+        runtime_config = SimpleNamespace(
+            api_key=effective_api_key,
+            api_base_url=config.api_base_url,
+            model_name=config.model_name,
+            avatar_id=config.avatar_id,
+            voice_id=config.voice_id,
+            extra_config=config.extra_config,
+        )
 
         extra_config = config.extra_config if isinstance(config.extra_config, dict) else {}
         configured_avatar_url = (config.avatar_id or extra_config.get("avatar_image_url") or "").strip()
@@ -166,7 +176,7 @@ class AlibabaWanxiangEngineAdapter:
                 avatar_image_path = paths.upload_dir / "avatar.jpg"
                 extract_avatar_frame(ffmpeg, video_path, avatar_image_path)
             audio_path = resolve_audio_path(audio_mode, files, paths) if audio_mode == "upload" else None
-            client = AlibabaWanxiangClient(settings_from_engine_config(config))
+            client = AlibabaWanxiangClient(settings_from_engine_config(runtime_config))
             generation = client.generate_video(
                 script=script,
                 audio_mode=audio_mode,
