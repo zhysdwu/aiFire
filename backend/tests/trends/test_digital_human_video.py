@@ -5,6 +5,10 @@ import pytest
 from rest_framework.test import APIClient
 
 from apps.trends.models import DigitalHumanEngineConfig
+from apps.trends.services.digital_human_engines import (
+    engine_config_to_public_dict,
+    resolve_engine_config,
+)
 from apps.trends.services.digital_human_video_service import (
     build_srt_content,
     DigitalHumanVideoError,
@@ -196,3 +200,96 @@ def test_digital_human_engine_default_unique_constraint_uses_generated_key():
     assert field.db_persist is True
     assert constraint.fields == ("default_unique_key",)
     assert constraint.condition is None
+
+
+@pytest.mark.django_db
+def test_engine_config_list_hides_disabled_and_api_key():
+    enabled = DigitalHumanEngineConfig.objects.create(
+        name="Enabled local",
+        engine_type=DigitalHumanEngineConfig.EngineType.LOCAL_FFMPEG,
+        is_enabled=True,
+        is_default=True,
+        api_key="secret-key",
+    )
+    DigitalHumanEngineConfig.objects.create(
+        name="Disabled Jimeng",
+        engine_type=DigitalHumanEngineConfig.EngineType.JIMENG_VISUAL,
+        is_enabled=False,
+    )
+
+    client = APIClient()
+    response = client.get("/api/digital-human/video-configs/")
+
+    assert response.status_code == 200
+    assert response.data["default_config_id"] == enabled.id
+    assert len(response.data["configs"]) == 1
+    assert response.data["configs"][0]["name"] == "Enabled local"
+    assert "api_key" not in response.data["configs"][0]
+
+
+@pytest.mark.django_db
+def test_resolve_engine_config_rejects_disabled_config():
+    config = DigitalHumanEngineConfig.objects.create(name="Disabled", is_enabled=False)
+
+    with pytest.raises(DigitalHumanVideoError) as exc:
+        resolve_engine_config(str(config.id))
+
+    assert exc.value.status_code == 400
+    assert "配置" in exc.value.message
+
+
+@pytest.mark.django_db
+def test_resolve_engine_config_returns_implicit_local_fallback_when_empty():
+    config = resolve_engine_config("")
+
+    assert config.id is None
+    assert config.name == "Local digital human fallback"
+    assert config.engine_type == DigitalHumanEngineConfig.EngineType.LOCAL_FFMPEG
+    assert config.subtitle_mode == DigitalHumanEngineConfig.SubtitleMode.ZH_EN
+
+
+@pytest.mark.django_db
+def test_resolve_engine_config_rejects_zero_config_id():
+    with pytest.raises(DigitalHumanVideoError) as exc:
+        resolve_engine_config(0)
+
+    assert exc.value.status_code == 400
+    assert "配置" in exc.value.message
+
+
+@pytest.mark.django_db
+def test_engine_config_list_includes_implicit_local_fallback_when_empty():
+    client = APIClient()
+    response = client.get("/api/digital-human/video-configs/")
+
+    assert response.status_code == 200
+    assert response.data["default_config_id"] is None
+    assert response.data["configs"] == [
+        {
+            "id": None,
+            "name": "Local digital human fallback",
+            "engine_type": DigitalHumanEngineConfig.EngineType.LOCAL_FFMPEG,
+            "engine_label": "Local composite",
+            "subtitle_mode": DigitalHumanEngineConfig.SubtitleMode.ZH_EN,
+            "subtitle_label": "Chinese and English subtitles",
+            "is_default": True,
+        }
+    ]
+
+
+@pytest.mark.django_db
+def test_engine_config_to_public_dict_has_labels():
+    config = DigitalHumanEngineConfig.objects.create(
+        name="Jimeng visual",
+        engine_type=DigitalHumanEngineConfig.EngineType.JIMENG_VISUAL,
+        subtitle_mode=DigitalHumanEngineConfig.SubtitleMode.ZH_EN,
+        is_default=True,
+    )
+
+    data = engine_config_to_public_dict(config)
+
+    assert data["id"] == config.id
+    assert data["engine_label"] == "Jimeng visual video"
+    assert data["subtitle_label"] == "Chinese and English subtitles"
+    assert data["is_default"] is True
+    assert "api_key" not in data

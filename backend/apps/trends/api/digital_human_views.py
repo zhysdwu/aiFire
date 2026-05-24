@@ -10,6 +10,7 @@ from rest_framework.views import APIView
 
 from apps.trends.models import Platform
 from apps.trends.services.digital_human_service import answer_with_digital_human
+from apps.trends.services.digital_human_engines import public_engine_config_payload
 from apps.trends.services.digital_human_video_service import DigitalHumanVideoError, generate_digital_human_video
 
 
@@ -45,6 +46,13 @@ class DigitalHumanVideoCreateView(APIView):
             return Response({"status": "failed", "message": exc.message}, status=exc.status_code)
         http_status = status.HTTP_200_OK if data.get("status") == "success" else status.HTTP_500_INTERNAL_SERVER_ERROR
         return Response(data, status=http_status)
+
+
+class DigitalHumanVideoConfigListView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request):
+        return Response(public_engine_config_payload(), status=status.HTTP_200_OK)
 
 
 class DigitalHumanVideoDownloadView(APIView):
