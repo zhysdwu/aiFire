@@ -62,6 +62,12 @@ def build_srt_content(script: str) -> str:
     return f"1\n00:00:00,000 --> 00:00:08,000\n{clean_script}\n"
 
 
+def build_bilingual_srt_content(script_zh: str, script_en: str) -> str:
+    clean_zh = " ".join((script_zh or "").split())
+    clean_en = " ".join((script_en or "").split())
+    return f"1\n00:00:00,000 --> 00:00:08,000\n{clean_zh}\n{clean_en}\n"
+
+
 def local_ffmpeg_roots() -> list[Path]:
     project_root = Path(settings.BASE_DIR).parent
     return [
@@ -185,8 +191,13 @@ def media_url_for_output(job_id: str) -> str:
     return f"{settings.MEDIA_URL.rstrip('/')}/digital_human/outputs/{job_id}.mp4"
 
 
-def run_ffmpeg_composite(ffmpeg: str, video_path: Path, audio_path: Path, subtitle_path: Path, output_path: Path) -> None:
-    subtitle_arg = str(subtitle_path).replace("\\", "/").replace(":", "\\:")
+def run_ffmpeg_composite(
+    ffmpeg: str,
+    video_path: Path,
+    audio_path: Path,
+    subtitle_path: Path | None,
+    output_path: Path,
+) -> None:
     cmd = [
         ffmpeg,
         "-y",
@@ -196,21 +207,26 @@ def run_ffmpeg_composite(ffmpeg: str, video_path: Path, audio_path: Path, subtit
         str(video_path),
         "-i",
         str(audio_path),
-        "-vf",
-        f"subtitles='{subtitle_arg}'",
-        "-map",
-        "0:v:0",
-        "-map",
-        "1:a:0",
-        "-shortest",
-        "-c:v",
-        "libx264",
-        "-c:a",
-        "aac",
-        "-pix_fmt",
-        "yuv420p",
-        str(output_path),
     ]
+    if subtitle_path is not None:
+        subtitle_arg = str(subtitle_path).replace("\\", "/").replace(":", "\\:")
+        cmd.extend(["-vf", f"subtitles='{subtitle_arg}'"])
+    cmd.extend(
+        [
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0",
+            "-shortest",
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "aac",
+            "-pix_fmt",
+            "yuv420p",
+            str(output_path),
+        ]
+    )
     subprocess.run(cmd, check=True, capture_output=True, text=True)
 
 
@@ -233,7 +249,9 @@ def result_with_engine_config(result: dict, *, engine: str, engine_config) -> di
     }
 
 
-def _generate_local_ffmpeg_video_impl(*, script: str, audio_mode: str, video_mode: str, files) -> dict:
+def _generate_local_ffmpeg_video_impl(
+    *, script: str, audio_mode: str, video_mode: str, files, subtitle_mode: str = "zh"
+) -> dict:
     job_id = str(uuid.uuid4())
     paths = build_paths(job_id)
     ensure_dirs(paths)
@@ -246,8 +264,16 @@ def _generate_local_ffmpeg_video_impl(*, script: str, audio_mode: str, video_mod
         ensure_default_assets(ffmpeg)
         audio_path = resolve_audio_path(audio_mode, files, paths)
         video_path = resolve_video_path(video_mode, files, paths)
-        paths.subtitle_path.write_text(build_srt_content(script), encoding="utf-8")
-        run_ffmpeg_composite(ffmpeg, video_path, audio_path, paths.subtitle_path, paths.output_path)
+        subtitle_path = paths.subtitle_path
+        if subtitle_mode == "none":
+            subtitle_path = None
+        elif subtitle_mode == "zh_en":
+            subtitle_content = build_bilingual_srt_content(script, script)
+            paths.subtitle_path.write_text(subtitle_content, encoding="utf-8")
+        else:
+            subtitle_content = build_srt_content(script)
+            paths.subtitle_path.write_text(subtitle_content, encoding="utf-8")
+        run_ffmpeg_composite(ffmpeg, video_path, audio_path, subtitle_path, paths.output_path)
     except DigitalHumanVideoError:
         raise
     except subprocess.CalledProcessError as exc:
@@ -266,11 +292,13 @@ def _generate_local_ffmpeg_video_impl(*, script: str, audio_mode: str, video_mod
 
 def generate_local_ffmpeg_video(*, script: str, audio_mode: str, video_mode: str, files, engine_config=None) -> dict:
     validate_generation_request(script=script, audio_mode=audio_mode, video_mode=video_mode, files=files)
+    subtitle_mode = getattr(engine_config, "subtitle_mode", "zh")
     result = _generate_local_ffmpeg_video_impl(
         script=script,
         audio_mode=audio_mode,
         video_mode=video_mode,
         files=files,
+        subtitle_mode=subtitle_mode,
     )
     return result_with_engine_config(result, engine="ffmpeg_composite", engine_config=engine_config)
 

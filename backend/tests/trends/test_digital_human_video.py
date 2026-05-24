@@ -10,6 +10,7 @@ from apps.trends.services.digital_human_engines import (
     resolve_engine_config,
 )
 from apps.trends.services.digital_human_video_service import (
+    build_bilingual_srt_content,
     build_srt_content,
     DigitalHumanVideoError,
     find_ffmpeg_binary,
@@ -49,6 +50,48 @@ def test_build_srt_content_escapes_blank_script():
     assert "1" in content
     assert "00:00:00,000 --> 00:00:08,000" in content
     assert "第一句 第二句" in content
+
+
+def test_build_bilingual_srt_content_contains_chinese_and_english_lines():
+    content = build_bilingual_srt_content("你好世界", "Hello world")
+
+    assert "你好世界" in content
+    assert "Hello world" in content
+    assert "00:00:00,000 --> 00:00:08,000" in content
+
+
+@pytest.mark.django_db
+def test_local_generation_skips_subtitle_filter_when_subtitle_mode_none(tmp_path, monkeypatch):
+    config = DigitalHumanEngineConfig.objects.create(
+        name="No subtitle local",
+        engine_type=DigitalHumanEngineConfig.EngineType.LOCAL_FFMPEG,
+        is_enabled=True,
+        is_default=True,
+        subtitle_mode=DigitalHumanEngineConfig.SubtitleMode.NONE,
+    )
+    calls = {}
+
+    monkeypatch.setattr(
+        "apps.trends.services.digital_human_video_service.digital_human_media_root",
+        lambda: tmp_path / "digital_human",
+    )
+    monkeypatch.setattr("apps.trends.services.digital_human_video_service.find_ffmpeg_binary", lambda: "ffmpeg")
+    monkeypatch.setattr("apps.trends.services.digital_human_video_service.ensure_default_assets", lambda ffmpeg: None)
+    monkeypatch.setattr(
+        "apps.trends.services.digital_human_video_service.run_ffmpeg_composite",
+        lambda *args: calls.setdefault("subtitle_path", args[3]),
+    )
+
+    result = generate_digital_human_video(
+        script="生成一条默认视频",
+        audio_mode="default",
+        video_mode="default",
+        files={},
+        config_id=str(config.id),
+    )
+
+    assert result["status"] == "success"
+    assert calls["subtitle_path"] is None
 
 
 def test_find_ffmpeg_binary_uses_local_tools_fallback(tmp_path, monkeypatch):
