@@ -1,17 +1,35 @@
 <script setup>
-import { computed, ref } from "vue";
-import { generateDigitalHumanVideo } from "../api/client";
+import { computed, onMounted, ref } from "vue";
+import { fetchDigitalHumanVideoConfigs, generateDigitalHumanVideo } from "../api/client";
 
 const scriptText = ref("");
 const audioMode = ref("default");
 const videoMode = ref("default");
 const audioFile = ref(null);
 const videoFile = ref(null);
+const configs = ref([]);
+const selectedConfigId = ref("");
+const configError = ref("");
 const loading = ref(false);
 const error = ref("");
 const result = ref(null);
 
 const canSubmit = computed(() => scriptText.value.trim().length >= 2 && !loading.value);
+const selectedConfig = computed(() => configs.value.find((config) => String(config.id) === String(selectedConfigId.value)) || null);
+const submittedConfigId = computed(() => (selectedConfigId.value === "" ? null : selectedConfigId.value));
+
+async function loadConfigs() {
+  configError.value = "";
+  try {
+    const payload = await fetchDigitalHumanVideoConfigs();
+    configs.value = Array.isArray(payload.configs) ? payload.configs : [];
+    selectedConfigId.value = payload.default_config_id ?? configs.value[0]?.id ?? "";
+  } catch (err) {
+    configs.value = [];
+    selectedConfigId.value = "";
+    configError.value = err.message || "配置加载失败";
+  }
+}
 
 function onAudioFile(event) {
   audioFile.value = event.target.files?.[0] || null;
@@ -36,6 +54,7 @@ async function submitVideo() {
       videoMode: videoMode.value,
       audioFile: audioMode.value === "upload" ? audioFile.value : null,
       videoFile: videoMode.value === "upload" ? videoFile.value : null,
+      configId: submittedConfigId.value,
     });
   } catch (err) {
     error.value = err.message || "数字人视频生成失败";
@@ -43,6 +62,8 @@ async function submitVideo() {
     loading.value = false;
   }
 }
+
+onMounted(loadConfigs);
 </script>
 
 <template>
@@ -55,6 +76,21 @@ async function submitVideo() {
 
     <section class="digital-video-layout">
       <form class="generator-panel" @submit.prevent="submitVideo">
+        <div class="config-picker">
+          <label for="video-config">视频配置</label>
+          <select id="video-config" v-model="selectedConfigId">
+            <option v-if="!configs.length" value="">本地默认配置</option>
+            <option v-for="config in configs" :key="config.id" :value="config.id">
+              {{ config.name }} / {{ config.engine_label }} / {{ config.subtitle_label }}
+            </option>
+          </select>
+          <p v-if="selectedConfig" class="config-summary">
+            当前配置：{{ selectedConfig.name }}，{{ selectedConfig.engine_label }}，{{ selectedConfig.subtitle_label }}
+          </p>
+          <p v-else class="config-summary">当前配置：本地默认配置</p>
+          <p v-if="configError" class="config-error">{{ configError }}</p>
+        </div>
+
         <label class="script-field">
           口播脚本
           <textarea v-model="scriptText" rows="7" placeholder="请输入想让数字人播报的内容"></textarea>
@@ -146,6 +182,42 @@ async function submitVideo() {
   color: var(--ink-soft);
   font-size: 14px;
   font-weight: 800;
+}
+
+.config-picker {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+  min-width: 0;
+}
+
+.config-picker label {
+  color: var(--ink-soft);
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.config-picker select {
+  border: 1px solid #d8c9b1;
+  border-radius: 8px;
+  min-width: 0;
+  width: 100%;
+}
+
+.config-summary,
+.config-error {
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.config-summary {
+  color: var(--ink-soft);
+}
+
+.config-error {
+  color: var(--danger);
 }
 
 .script-field textarea {

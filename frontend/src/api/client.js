@@ -216,12 +216,22 @@ export async function triggerWorkflowStep(platform, step) {
   return response.json();
 }
 
+export async function fetchDigitalHumanVideoConfigs() {
+  const response = await fetch("/api/digital-human/video-configs/", { credentials: "same-origin" });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.message || payload.detail || "获取数字人视频配置失败");
+  }
+  return payload;
+}
+
 export async function generateDigitalHumanVideo({
   script,
   audioMode = "default",
   videoMode = "default",
   audioFile = null,
   videoFile = null,
+  configId = null,
 }) {
   const formData = new FormData();
   formData.set("script", script);
@@ -229,6 +239,9 @@ export async function generateDigitalHumanVideo({
   formData.set("video_mode", videoMode);
   if (audioFile) formData.set("audio_file", audioFile);
   if (videoFile) formData.set("video_file", videoFile);
+  if (configId !== null && configId !== undefined && configId !== "") {
+    formData.set("config_id", String(configId));
+  }
 
   const csrfToken = readCookie("csrftoken");
   const response = await fetch("/api/digital-human/videos/", {
