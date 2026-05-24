@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Protocol
 
 from apps.trends.models import DigitalHumanEngineConfig
 from apps.trends.services.digital_human_video_service import DigitalHumanVideoError
@@ -73,6 +74,62 @@ def engine_config_to_public_dict(config) -> dict:
         "subtitle_label": SUBTITLE_LABELS.get(config.subtitle_mode, config.subtitle_mode),
         "is_default": bool(config.is_default),
     }
+
+
+class DigitalHumanEngineAdapter(Protocol):
+    def generate(self, *, script: str, audio_mode: str, video_mode: str, files, config) -> dict:
+        ...
+
+
+class LocalFfmpegEngineAdapter:
+    def generate(self, *, script: str, audio_mode: str, video_mode: str, files, config) -> dict:
+        from apps.trends.services.digital_human_video_service import generate_local_ffmpeg_video
+
+        return generate_local_ffmpeg_video(
+            script=script,
+            audio_mode=audio_mode,
+            video_mode=video_mode,
+            files=files,
+            engine_config=config,
+        )
+
+
+class JimengVisualEngineAdapter:
+    def generate(self, *, script: str, audio_mode: str, video_mode: str, files, config) -> dict:
+        payload = {
+            "status": "failed",
+            "engine": DigitalHumanEngineConfig.EngineType.JIMENG_VISUAL,
+            "engine_config": engine_config_to_public_dict(config),
+        }
+        if not (config.api_key or "").strip():
+            return {**payload, "message": "Jimeng visual API Key is required."}
+        return {**payload, "message": "Jimeng visual engine is not integrated yet."}
+
+
+class TalkingAvatarEngineAdapter:
+    def generate(self, *, script: str, audio_mode: str, video_mode: str, files, config) -> dict:
+        payload = {
+            "status": "failed",
+            "engine": DigitalHumanEngineConfig.EngineType.TALKING_AVATAR,
+            "engine_config": engine_config_to_public_dict(config),
+        }
+        if not (config.api_key or "").strip():
+            return {**payload, "message": "Talking avatar API Key is required."}
+        return {**payload, "message": "Talking avatar engine is not integrated yet."}
+
+
+ADAPTERS: dict[str, DigitalHumanEngineAdapter] = {
+    DigitalHumanEngineConfig.EngineType.LOCAL_FFMPEG: LocalFfmpegEngineAdapter(),
+    DigitalHumanEngineConfig.EngineType.JIMENG_VISUAL: JimengVisualEngineAdapter(),
+    DigitalHumanEngineConfig.EngineType.TALKING_AVATAR: TalkingAvatarEngineAdapter(),
+}
+
+
+def get_engine_adapter(engine_type: str) -> DigitalHumanEngineAdapter:
+    adapter = ADAPTERS.get(engine_type)
+    if not adapter:
+        raise DigitalHumanVideoError("当前数字人引擎尚未接入", 500)
+    return adapter
 
 
 def public_engine_config_payload() -> dict:

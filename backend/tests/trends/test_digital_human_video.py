@@ -68,6 +68,7 @@ def test_find_ffmpeg_binary_uses_local_tools_fallback(tmp_path, monkeypatch):
 
 
 @override_settings(MEDIA_URL="/media/")
+@pytest.mark.django_db
 def test_generate_digital_human_video_returns_failed_when_ffmpeg_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "apps.trends.services.digital_human_video_service.digital_human_media_root",
@@ -84,6 +85,75 @@ def test_generate_digital_human_video_returns_failed_when_ffmpeg_missing(tmp_pat
 
     assert result["status"] == "failed"
     assert "ffmpeg" in result["message"].lower()
+
+
+@pytest.mark.django_db
+def test_generation_with_jimeng_config_without_api_key_returns_clear_error():
+    config = DigitalHumanEngineConfig.objects.create(
+        name="Jimeng visual",
+        engine_type=DigitalHumanEngineConfig.EngineType.JIMENG_VISUAL,
+        is_enabled=True,
+        is_default=True,
+    )
+
+    result = generate_digital_human_video(
+        script="生成一条默认视频",
+        audio_mode="default",
+        video_mode="default",
+        files={},
+        config_id=str(config.id),
+    )
+
+    assert result["status"] == "failed"
+    assert "API Key" in result["message"]
+    assert result["engine"] == "jimeng_visual"
+    assert result["engine_config"]["id"] == config.id
+
+
+@pytest.mark.django_db
+def test_generation_without_config_id_uses_enabled_default_config():
+    config = DigitalHumanEngineConfig.objects.create(
+        name="Jimeng default",
+        engine_type=DigitalHumanEngineConfig.EngineType.JIMENG_VISUAL,
+        is_enabled=True,
+        is_default=True,
+    )
+
+    result = generate_digital_human_video(
+        script="生成一条默认视频",
+        audio_mode="default",
+        video_mode="default",
+        files={},
+    )
+
+    assert result["status"] == "failed"
+    assert "API Key" in result["message"]
+    assert result["engine"] == "jimeng_visual"
+    assert result["engine_config"]["id"] == config.id
+
+
+@pytest.mark.django_db
+def test_generation_response_includes_local_engine_config(monkeypatch):
+    config = DigitalHumanEngineConfig.objects.create(
+        name="Local composite",
+        engine_type=DigitalHumanEngineConfig.EngineType.LOCAL_FFMPEG,
+        is_enabled=True,
+        is_default=True,
+    )
+    monkeypatch.setattr("apps.trends.services.digital_human_video_service.find_ffmpeg_binary", lambda: None)
+
+    result = generate_digital_human_video(
+        script="生成一条默认视频",
+        audio_mode="default",
+        video_mode="default",
+        files={},
+        config_id=str(config.id),
+    )
+
+    assert result["status"] == "failed"
+    assert result["engine"] == "ffmpeg_composite"
+    assert result["engine_config"]["id"] == config.id
+    assert result["engine_config"]["name"] == "Local composite"
 
 
 @pytest.mark.django_db

@@ -214,8 +214,26 @@ def run_ffmpeg_composite(ffmpeg: str, video_path: Path, audio_path: Path, subtit
     subprocess.run(cmd, check=True, capture_output=True, text=True)
 
 
-def generate_digital_human_video(*, script: str, audio_mode: str, video_mode: str, files) -> dict:
-    validate_generation_request(script=script, audio_mode=audio_mode, video_mode=video_mode, files=files)
+def engine_config_to_result_dict(config) -> dict:
+    return {
+        "id": config.id,
+        "name": config.name,
+        "engine_type": config.engine_type,
+        "subtitle_mode": config.subtitle_mode,
+    }
+
+
+def result_with_engine_config(result: dict, *, engine: str, engine_config) -> dict:
+    if engine_config is None:
+        return result
+    return {
+        **result,
+        "engine": engine,
+        "engine_config": engine_config_to_result_dict(engine_config),
+    }
+
+
+def _generate_local_ffmpeg_video_impl(*, script: str, audio_mode: str, video_mode: str, files) -> dict:
     job_id = str(uuid.uuid4())
     paths = build_paths(job_id)
     ensure_dirs(paths)
@@ -244,3 +262,29 @@ def generate_digital_human_video(*, script: str, audio_mode: str, video_mode: st
         "download_url": f"/api/digital-human/videos/{job_id}/download/",
         "message": "生成完成",
     }
+
+
+def generate_local_ffmpeg_video(*, script: str, audio_mode: str, video_mode: str, files, engine_config=None) -> dict:
+    validate_generation_request(script=script, audio_mode=audio_mode, video_mode=video_mode, files=files)
+    result = _generate_local_ffmpeg_video_impl(
+        script=script,
+        audio_mode=audio_mode,
+        video_mode=video_mode,
+        files=files,
+    )
+    return result_with_engine_config(result, engine="ffmpeg_composite", engine_config=engine_config)
+
+
+def generate_digital_human_video(*, script: str, audio_mode: str, video_mode: str, files, config_id=None) -> dict:
+    validate_generation_request(script=script, audio_mode=audio_mode, video_mode=video_mode, files=files)
+    from apps.trends.services.digital_human_engines import get_engine_adapter, resolve_engine_config
+
+    config = resolve_engine_config(config_id)
+    adapter = get_engine_adapter(config.engine_type)
+    return adapter.generate(
+        script=script,
+        audio_mode=audio_mode,
+        video_mode=video_mode,
+        files=files,
+        config=config,
+    )

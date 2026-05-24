@@ -41,6 +41,7 @@ class DigitalHumanVideoCreateView(APIView):
                 audio_mode=request.data.get("audio_mode") or "default",
                 video_mode=request.data.get("video_mode") or "default",
                 files=request.FILES,
+                config_id=request.data.get("config_id"),
             )
         except DigitalHumanVideoError as exc:
             return Response({"status": "failed", "message": exc.message}, status=exc.status_code)
