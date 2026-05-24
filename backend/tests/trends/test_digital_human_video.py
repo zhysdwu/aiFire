@@ -1,8 +1,10 @@
 from django.conf import settings
+from django.db import IntegrityError, models, transaction
 from django.test import override_settings
 import pytest
 from rest_framework.test import APIClient
 
+from apps.trends.models import DigitalHumanEngineConfig
 from apps.trends.services.digital_human_video_service import (
     build_srt_content,
     DigitalHumanVideoError,
@@ -130,3 +132,67 @@ def test_digital_human_video_download_returns_file(tmp_path, settings):
 
     assert response.status_code == 200
     assert response["Content-Type"] == "video/mp4"
+
+
+@pytest.mark.django_db
+def test_digital_human_engine_default_is_unique():
+    first = DigitalHumanEngineConfig.objects.create(
+        name="Local A",
+        engine_type=DigitalHumanEngineConfig.EngineType.LOCAL_FFMPEG,
+        is_enabled=True,
+        is_default=True,
+    )
+    second = DigitalHumanEngineConfig.objects.create(
+        name="Local B",
+        engine_type=DigitalHumanEngineConfig.EngineType.LOCAL_FFMPEG,
+        is_enabled=True,
+        is_default=True,
+    )
+
+    first.refresh_from_db()
+    second.refresh_from_db()
+    assert first.is_default is False
+    assert second.is_default is True
+
+
+@pytest.mark.django_db
+def test_digital_human_engine_str_returns_name():
+    config = DigitalHumanEngineConfig.objects.create(name="Jimeng visual")
+
+    assert str(config) == "Jimeng visual"
+
+
+@pytest.mark.django_db
+def test_digital_human_engine_default_is_enforced_at_database_level():
+    DigitalHumanEngineConfig.objects.create(
+        name="Local A",
+        engine_type=DigitalHumanEngineConfig.EngineType.LOCAL_FFMPEG,
+        is_enabled=True,
+        is_default=True,
+    )
+
+    with pytest.raises(IntegrityError), transaction.atomic():
+        DigitalHumanEngineConfig.objects.bulk_create(
+            [
+                DigitalHumanEngineConfig(
+                    name="Local B",
+                    engine_type=DigitalHumanEngineConfig.EngineType.LOCAL_FFMPEG,
+                    is_enabled=True,
+                    is_default=True,
+                )
+            ]
+        )
+
+
+def test_digital_human_engine_default_unique_constraint_uses_generated_key():
+    field = DigitalHumanEngineConfig._meta.get_field("default_unique_key")
+    constraint = next(
+        item
+        for item in DigitalHumanEngineConfig._meta.constraints
+        if item.name == "unique_default_digital_human_engine_config"
+    )
+
+    assert isinstance(field, models.GeneratedField)
+    assert field.db_persist is True
+    assert constraint.fields == ("default_unique_key",)
+    assert constraint.condition is None

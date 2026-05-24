@@ -9,6 +9,7 @@ from .models import (
     Category,
     DataSourceStatus,
     DeleteReasonType,
+    DigitalHumanEngineConfig,
     EvidenceLink,
     GeneratedTitle,
     Phrase,
@@ -138,6 +139,36 @@ class GeneratedTitleAdmin(admin.ModelAdmin):
     @admin.action(description="取消发布所选标题")
     def unpublish_selected(self, request, queryset):
         queryset.update(is_published=False)
+
+
+@admin.register(DigitalHumanEngineConfig)
+class DigitalHumanEngineConfigAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "name",
+        "engine_type",
+        "is_enabled",
+        "is_default",
+        "subtitle_mode",
+        "model_name",
+        "updated_at",
+    )
+    search_fields = ("name", "engine_type", "model_name", "avatar_id", "voice_id")
+    list_filter = ("engine_type", "is_enabled", "is_default", "subtitle_mode")
+    fields = (
+        "name",
+        "engine_type",
+        "is_enabled",
+        "is_default",
+        "api_base_url",
+        "api_key",
+        "model_name",
+        "avatar_id",
+        "voice_id",
+        "subtitle_mode",
+        "default_prompt",
+        "extra_config",
+    )
 
 
 admin.site.register(TikTokRawSnapshot)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from django.db import models
+from django.db import models, transaction
 
 
 class Platform(models.TextChoices):
@@ -227,3 +227,60 @@ class DigitalHumanSessionLog(models.Model):
         related_name="digital_human_session_logs",
     )
     created_at = models.DateTimeField(auto_now_add=True)
+
+
+class DigitalHumanEngineConfig(models.Model):
+    class EngineType(models.TextChoices):
+        LOCAL_FFMPEG = "local_ffmpeg", "Local FFmpeg"
+        JIMENG_VISUAL = "jimeng_visual", "Jimeng visual"
+        TALKING_AVATAR = "talking_avatar", "Talking avatar"
+
+    class SubtitleMode(models.TextChoices):
+        NONE = "none", "No subtitles"
+        ZH = "zh", "Chinese subtitles"
+        ZH_EN = "zh_en", "Chinese and English subtitles"
+
+    name = models.CharField(max_length=128)
+    engine_type = models.CharField(max_length=32, choices=EngineType.choices, default=EngineType.LOCAL_FFMPEG)
+    is_enabled = models.BooleanField(default=True)
+    is_default = models.BooleanField(default=False)
+    api_base_url = models.URLField(blank=True, default="")
+    api_key = models.CharField(max_length=255, blank=True, default="")
+    model_name = models.CharField(max_length=128, blank=True, default="")
+    avatar_id = models.CharField(max_length=128, blank=True, default="")
+    voice_id = models.CharField(max_length=128, blank=True, default="")
+    subtitle_mode = models.CharField(max_length=16, choices=SubtitleMode.choices, default=SubtitleMode.ZH_EN)
+    default_prompt = models.TextField(blank=True, default="")
+    extra_config = models.JSONField(default=dict, blank=True)
+    default_unique_key = models.GeneratedField(
+        expression=models.Case(
+            models.When(is_default=True, then=models.Value(1)),
+            default=models.Value(None),
+            output_field=models.IntegerField(),
+        ),
+        output_field=models.IntegerField(),
+        db_persist=True,
+        null=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-is_default", "name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["default_unique_key"],
+                name="unique_default_digital_human_engine_config",
+            )
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.is_default:
+            with transaction.atomic():
+                type(self).objects.exclude(pk=self.pk).filter(is_default=True).update(is_default=False)
+                super().save(*args, **kwargs)
+            return
+        super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        return self.name
