@@ -234,6 +234,7 @@ class DigitalHumanEngineConfig(models.Model):
         LOCAL_FFMPEG = "local_ffmpeg", "Local FFmpeg"
         JIMENG_VISUAL = "jimeng_visual", "Jimeng visual"
         TALKING_AVATAR = "talking_avatar", "Talking avatar"
+        ALIBABA_WANXIANG = "alibaba_wanxiang", "Alibaba Wanxiang"
 
     class SubtitleMode(models.TextChoices):
         NONE = "none", "No subtitles"

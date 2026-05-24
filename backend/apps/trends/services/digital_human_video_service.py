@@ -230,6 +230,27 @@ def run_ffmpeg_composite(
     subprocess.run(cmd, check=True, capture_output=True, text=True)
 
 
+def extract_avatar_frame(ffmpeg: str, video_path: Path, image_path: Path) -> Path:
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            ffmpeg,
+            "-y",
+            "-i",
+            str(video_path),
+            "-frames:v",
+            "1",
+            "-q:v",
+            "2",
+            str(image_path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return image_path
+
+
 def engine_config_to_result_dict(config) -> dict:
     return {
         "id": config.id,

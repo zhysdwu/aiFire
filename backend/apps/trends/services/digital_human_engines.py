@@ -11,6 +11,7 @@ ENGINE_LABELS = {
     DigitalHumanEngineConfig.EngineType.LOCAL_FFMPEG: "Local composite",
     DigitalHumanEngineConfig.EngineType.JIMENG_VISUAL: "Jimeng visual video",
     DigitalHumanEngineConfig.EngineType.TALKING_AVATAR: "Talking avatar",
+    DigitalHumanEngineConfig.EngineType.ALIBABA_WANXIANG: "Alibaba Wanxiang digital human",
 }
 
 SUBTITLE_LABELS = {
@@ -118,10 +119,89 @@ class TalkingAvatarEngineAdapter:
         return {**payload, "message": "Talking avatar engine is not integrated yet."}
 
 
+class AlibabaWanxiangEngineAdapter:
+    def generate(self, *, script: str, audio_mode: str, video_mode: str, files, config) -> dict:
+        from apps.trends.services.alibaba_wanxiang_client import (
+            AlibabaWanxiangClient,
+            settings_from_engine_config,
+        )
+        from apps.trends.services.digital_human_video_service import (
+            build_paths,
+            default_video_path,
+            ensure_default_assets,
+            ensure_dirs,
+            extract_avatar_frame,
+            find_ffmpeg_binary,
+            media_url_for_output,
+            resolve_audio_path,
+            resolve_video_path,
+            result_with_engine_config,
+        )
+
+        payload = {
+            "status": "failed",
+            "engine": DigitalHumanEngineConfig.EngineType.ALIBABA_WANXIANG,
+            "engine_config": engine_config_to_public_dict(config),
+        }
+        if not (config.api_key or "").strip():
+            return {**payload, "message": "Alibaba Wanxiang API Key is required."}
+
+        extra_config = config.extra_config if isinstance(config.extra_config, dict) else {}
+        configured_avatar_url = (config.avatar_id or extra_config.get("avatar_image_url") or "").strip()
+
+        import uuid
+
+        job_id = str(uuid.uuid4())
+        paths = build_paths(job_id)
+        ensure_dirs(paths)
+        avatar_image_path = None
+
+        try:
+            if video_mode == "upload" or not configured_avatar_url:
+                ffmpeg = find_ffmpeg_binary()
+                if not ffmpeg:
+                    return {**payload, "message": "生成失败：未找到 ffmpeg，无法为阿里万相提取数字人人像首帧"}
+                ensure_default_assets(ffmpeg)
+                video_path = default_video_path() if video_mode == "default" else resolve_video_path(video_mode, files, paths)
+                avatar_image_path = paths.upload_dir / "avatar.jpg"
+                extract_avatar_frame(ffmpeg, video_path, avatar_image_path)
+            audio_path = resolve_audio_path(audio_mode, files, paths) if audio_mode == "upload" else None
+            client = AlibabaWanxiangClient(settings_from_engine_config(config))
+            generation = client.generate_video(
+                script=script,
+                audio_mode=audio_mode,
+                audio_path=audio_path,
+                avatar_image_path=avatar_image_path,
+                avatar_image_url="" if video_mode == "upload" else configured_avatar_url,
+                output_path=paths.output_path,
+            )
+        except DigitalHumanVideoError as exc:
+            return {**payload, "message": exc.message}
+        except Exception as exc:
+            return {**payload, "message": f"Alibaba Wanxiang generation failed: {str(exc)[:240]}"}
+
+        result = {
+            "job_id": job_id,
+            "status": "success",
+            "engine": DigitalHumanEngineConfig.EngineType.ALIBABA_WANXIANG,
+            "video_url": media_url_for_output(job_id),
+            "download_url": f"/api/digital-human/videos/{job_id}/download/",
+            "message": "Alibaba Wanxiang video generated successfully.",
+            "provider_task_id": generation.get("task_id", ""),
+            "provider_video_url": generation.get("source_video_url", ""),
+        }
+        return result_with_engine_config(
+            result,
+            engine=DigitalHumanEngineConfig.EngineType.ALIBABA_WANXIANG,
+            engine_config=config,
+        )
+
+
 ADAPTERS: dict[str, DigitalHumanEngineAdapter] = {
     DigitalHumanEngineConfig.EngineType.LOCAL_FFMPEG: LocalFfmpegEngineAdapter(),
     DigitalHumanEngineConfig.EngineType.JIMENG_VISUAL: JimengVisualEngineAdapter(),
     DigitalHumanEngineConfig.EngineType.TALKING_AVATAR: TalkingAvatarEngineAdapter(),
+    DigitalHumanEngineConfig.EngineType.ALIBABA_WANXIANG: AlibabaWanxiangEngineAdapter(),
 }
 
 

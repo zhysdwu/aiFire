@@ -17,6 +17,7 @@ const result = ref(null);
 const canSubmit = computed(() => scriptText.value.trim().length >= 2 && !loading.value);
 const selectedConfig = computed(() => configs.value.find((config) => String(config.id) === String(selectedConfigId.value)) || null);
 const submittedConfigId = computed(() => (selectedConfigId.value === "" ? null : selectedConfigId.value));
+const isAlibabaWanxiang = computed(() => selectedConfig.value?.engine_type === "alibaba_wanxiang");
 
 async function loadConfigs() {
   configError.value = "";
@@ -88,6 +89,9 @@ onMounted(loadConfigs);
             当前配置：{{ selectedConfig.name }}，{{ selectedConfig.engine_label }}，{{ selectedConfig.subtitle_label }}
           </p>
           <p v-else class="config-summary">当前配置：本地默认配置</p>
+          <p v-if="isAlibabaWanxiang" class="config-hint">
+            阿里万相会从视频素材提取首帧作为数字人人像；默认音频会用脚本文本生成语音。
+          </p>
           <p v-if="configError" class="config-error">{{ configError }}</p>
         </div>
 
@@ -205,6 +209,7 @@ onMounted(loadConfigs);
 }
 
 .config-summary,
+.config-hint,
 .config-error {
   font-size: 13px;
   line-height: 1.5;
@@ -214,6 +219,10 @@ onMounted(loadConfigs);
 
 .config-summary {
   color: var(--ink-soft);
+}
+
+.config-hint {
+  color: var(--brand-strong);
 }
 
 .config-error {

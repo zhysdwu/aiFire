@@ -406,3 +406,285 @@ def test_engine_config_to_public_dict_has_labels():
     assert data["subtitle_label"] == "Chinese and English subtitles"
     assert data["is_default"] is True
     assert "api_key" not in data
+
+
+@pytest.mark.django_db
+def test_alibaba_wanxiang_engine_config_has_public_label():
+    config = DigitalHumanEngineConfig.objects.create(
+        name="Alibaba Wanxiang",
+        engine_type=DigitalHumanEngineConfig.EngineType.ALIBABA_WANXIANG,
+        subtitle_mode=DigitalHumanEngineConfig.SubtitleMode.ZH_EN,
+        is_default=True,
+        api_key="secret-key",
+    )
+
+    data = engine_config_to_public_dict(config)
+
+    assert data["engine_type"] == "alibaba_wanxiang"
+    assert data["engine_label"] == "Alibaba Wanxiang digital human"
+    assert data["subtitle_label"] == "Chinese and English subtitles"
+    assert "api_key" not in data
+
+
+@pytest.mark.django_db
+def test_generation_with_alibaba_wanxiang_config_without_api_key_returns_clear_error():
+    config = DigitalHumanEngineConfig.objects.create(
+        name="Alibaba Wanxiang",
+        engine_type=DigitalHumanEngineConfig.EngineType.ALIBABA_WANXIANG,
+        is_enabled=True,
+        is_default=True,
+    )
+
+    result = generate_digital_human_video(
+        script="Generate a digital human video",
+        audio_mode="default",
+        video_mode="default",
+        files={},
+        config_id=str(config.id),
+    )
+
+    assert result["status"] == "failed"
+    assert "Alibaba Wanxiang API Key" in result["message"]
+    assert result["engine"] == "alibaba_wanxiang"
+    assert result["engine_config"]["id"] == config.id
+
+
+@pytest.mark.django_db
+def test_alibaba_wanxiang_generation_uses_tts_avatar_frame_and_downloads_video(tmp_path, monkeypatch):
+    config = DigitalHumanEngineConfig.objects.create(
+        name="Alibaba Wanxiang",
+        engine_type=DigitalHumanEngineConfig.EngineType.ALIBABA_WANXIANG,
+        is_enabled=True,
+        is_default=True,
+        api_key="sk-test",
+        voice_id="longanyang",
+        extra_config={"poll_timeout_s": 1, "poll_interval_s": 0, "resolution": "480P"},
+    )
+    media_root = tmp_path / "digital_human"
+    default_video = media_root / "defaults" / "default_video.mp4"
+    default_video.parent.mkdir(parents=True)
+    default_video.write_bytes(b"fake-video")
+    captured = {}
+
+    class FakeWanxiangClient:
+        def __init__(self, settings, session=None, sleep_func=None):
+            captured["settings"] = settings
+
+        def generate_video(self, *, script, audio_mode, audio_path, avatar_image_path=None, avatar_image_url="", output_path):
+            captured["script"] = script
+            captured["audio_mode"] = audio_mode
+            captured["audio_path"] = audio_path
+            captured["avatar_image_path"] = avatar_image_path
+            captured["avatar_image_url"] = avatar_image_url
+            output_path.write_bytes(b"generated-mp4")
+            return {"task_id": "task-123", "source_video_url": "https://example.test/result.mp4"}
+
+    def fake_extract_avatar_frame(ffmpeg, video_path, image_path):
+        captured["ffmpeg"] = ffmpeg
+        captured["video_path"] = video_path
+        image_path.write_bytes(b"avatar")
+        return image_path
+
+    monkeypatch.setattr(
+        "apps.trends.services.digital_human_video_service.digital_human_media_root",
+        lambda: media_root,
+    )
+    monkeypatch.setattr("apps.trends.services.digital_human_video_service.find_ffmpeg_binary", lambda: "ffmpeg")
+    monkeypatch.setattr("apps.trends.services.digital_human_video_service.ensure_default_assets", lambda ffmpeg: None)
+    monkeypatch.setattr(
+        "apps.trends.services.digital_human_video_service.extract_avatar_frame",
+        fake_extract_avatar_frame,
+    )
+    monkeypatch.setattr(
+        "apps.trends.services.alibaba_wanxiang_client.AlibabaWanxiangClient",
+        FakeWanxiangClient,
+    )
+
+    result = generate_digital_human_video(
+        script="Generate a digital human video",
+        audio_mode="default",
+        video_mode="default",
+        files={},
+        config_id=str(config.id),
+    )
+
+    assert result["status"] == "success"
+    assert result["engine"] == "alibaba_wanxiang"
+    assert result["engine_config"]["id"] == config.id
+    assert result["video_url"].startswith("/media/digital_human/outputs/")
+    assert result["download_url"].startswith("/api/digital-human/videos/")
+    assert captured["settings"].api_key == "sk-test"
+    assert captured["settings"].model_name == "wan2.2-s2v"
+    assert captured["settings"].voice == "longanyang"
+    assert captured["settings"].resolution == "480P"
+    assert captured["audio_mode"] == "default"
+    assert captured["avatar_image_path"].read_bytes() == b"avatar"
+    assert captured["video_path"] == default_video
+
+
+@pytest.mark.django_db
+def test_alibaba_wanxiang_generation_uses_configured_avatar_url_without_ffmpeg(tmp_path, monkeypatch):
+    config = DigitalHumanEngineConfig.objects.create(
+        name="Alibaba Wanxiang URL avatar",
+        engine_type=DigitalHumanEngineConfig.EngineType.ALIBABA_WANXIANG,
+        is_enabled=True,
+        is_default=True,
+        api_key="sk-test",
+        avatar_id="https://cdn.example.test/avatar.png",
+    )
+    media_root = tmp_path / "digital_human"
+    captured = {}
+
+    class FakeWanxiangClient:
+        def __init__(self, settings, session=None, sleep_func=None):
+            captured["settings"] = settings
+
+        def generate_video(self, *, script, audio_mode, audio_path, avatar_image_path=None, avatar_image_url=None, output_path):
+            captured["avatar_image_path"] = avatar_image_path
+            captured["avatar_image_url"] = avatar_image_url
+            output_path.write_bytes(b"generated-mp4")
+            return {"task_id": "task-456", "source_video_url": "https://example.test/result.mp4"}
+
+    monkeypatch.setattr(
+        "apps.trends.services.digital_human_video_service.digital_human_media_root",
+        lambda: media_root,
+    )
+    monkeypatch.setattr("apps.trends.services.digital_human_video_service.find_ffmpeg_binary", lambda: None)
+    monkeypatch.setattr(
+        "apps.trends.services.alibaba_wanxiang_client.AlibabaWanxiangClient",
+        FakeWanxiangClient,
+    )
+
+    result = generate_digital_human_video(
+        script="Generate a digital human video",
+        audio_mode="default",
+        video_mode="default",
+        files={},
+        config_id=str(config.id),
+    )
+
+    assert result["status"] == "success"
+    assert result["engine"] == "alibaba_wanxiang"
+    assert captured["avatar_image_url"] == "https://cdn.example.test/avatar.png"
+    assert captured["avatar_image_path"] is None
+
+
+def test_alibaba_wanxiang_client_submits_polls_and_downloads(tmp_path):
+    from apps.trends.services.alibaba_wanxiang_client import AlibabaWanxiangClient, AlibabaWanxiangSettings
+
+    output_path = tmp_path / "output.mp4"
+    avatar_path = tmp_path / "avatar.jpg"
+    audio_path = tmp_path / "audio.wav"
+    avatar_path.write_bytes(b"avatar")
+    audio_path.write_bytes(b"audio")
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, payload=None, content=b"", status_code=200):
+            self.payload = payload or {}
+            self.content = content
+            self.status_code = status_code
+            self.text = str(self.payload)
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(self.text)
+
+        def json(self):
+            return self.payload
+
+        def iter_content(self, chunk_size=1024 * 1024):
+            yield self.content
+
+    class FakeSession:
+        def get(self, url, **kwargs):
+            calls.append(("GET", url, kwargs))
+            if url.endswith("/api/v1/uploads"):
+                return FakeResponse(
+                    {
+                        "data": {
+                            "upload_dir": "dashscope-instant/test",
+                            "oss_access_key_id": "ak",
+                            "signature": "sig",
+                            "policy": "policy",
+                            "x_oss_object_acl": "private",
+                            "x_oss_forbid_overwrite": "true",
+                            "upload_host": "https://upload.example.test",
+                        }
+                    }
+                )
+            if url.endswith("/api/v1/tasks/task-123"):
+                return FakeResponse({"output": {"task_status": "SUCCEEDED", "results": {"video_url": "https://result.example.test/video.mp4"}}})
+            if url == "https://result.example.test/video.mp4":
+                return FakeResponse(content=b"mp4-data")
+            raise AssertionError(f"unexpected GET {url}")
+
+        def post(self, url, **kwargs):
+            calls.append(("POST", url, kwargs))
+            if url == "https://upload.example.test":
+                return FakeResponse()
+            if url.endswith("/api/v1/services/aigc/image2video/video-synthesis"):
+                return FakeResponse({"output": {"task_id": "task-123", "task_status": "PENDING"}})
+            raise AssertionError(f"unexpected POST {url}")
+
+    client = AlibabaWanxiangClient(
+        AlibabaWanxiangSettings(api_key="sk-test", poll_interval_s=0, poll_timeout_s=1),
+        session=FakeSession(),
+        sleep_func=lambda seconds: None,
+    )
+
+    result = client.generate_video(
+        script="Generate a digital human video",
+        audio_mode="upload",
+        audio_path=audio_path,
+        avatar_image_path=avatar_path,
+        output_path=output_path,
+    )
+
+    assert result["task_id"] == "task-123"
+    assert result["source_video_url"] == "https://result.example.test/video.mp4"
+    assert output_path.read_bytes() == b"mp4-data"
+    task_posts = [call for call in calls if call[0] == "POST" and call[1].endswith("/video-synthesis")]
+    assert task_posts[0][2]["headers"]["X-DashScope-Async"] == "enable"
+    assert task_posts[0][2]["headers"]["X-DashScope-OssResourceResolve"] == "enable"
+    assert task_posts[0][1] == "https://dashscope.aliyuncs.com/api/v1/services/aigc/image2video/video-synthesis"
+    assert task_posts[0][2]["json"]["model"] == "wan2.2-s2v"
+    assert task_posts[0][2]["json"]["parameters"]["resolution"] == "480P"
+
+
+def test_alibaba_wanxiang_client_uses_qwen_http_tts_for_default_audio():
+    from apps.trends.services.alibaba_wanxiang_client import AlibabaWanxiangClient, AlibabaWanxiangSettings
+
+    calls = []
+
+    class FakeResponse:
+        text = "{}"
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"output": {"audio": {"url": "https://audio.example.test/speech.wav"}}}
+
+    class FakeSession:
+        def post(self, url, **kwargs):
+            calls.append(("POST", url, kwargs))
+            return FakeResponse()
+
+    client = AlibabaWanxiangClient(
+        AlibabaWanxiangSettings(api_key="sk-test", tts_model="qwen3-tts-flash", voice="Cherry"),
+        session=FakeSession(),
+    )
+
+    audio_url = client.synthesize_tts("你好，欢迎观看今天的热点解读。")
+
+    assert audio_url == "https://audio.example.test/speech.wav"
+    assert calls[0][1] == "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+    assert calls[0][2]["json"] == {
+        "model": "qwen3-tts-flash",
+        "input": {
+            "text": "你好，欢迎观看今天的热点解读。",
+            "voice": "Cherry",
+            "language_type": "Chinese",
+        },
+    }
