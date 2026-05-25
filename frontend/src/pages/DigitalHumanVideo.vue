@@ -1,151 +1,298 @@
 <script setup>
-import { computed, onMounted, ref } from "vue";
-import { fetchDigitalHumanVideoConfigs, generateDigitalHumanVideo } from "../api/client";
+import { computed, onMounted, ref, watch } from "vue";
+import { cloneVoiceAndSynthesize, generateDigitalHumanVideo } from "../api/client";
 
-const scriptText = ref("");
-const audioMode = ref("default");
-const videoMode = ref("default");
+const API_KEY_STORAGE = "digital_human_alibaba_api_key";
+const SUBTITLE_STORAGE = "digital_human_subtitle_lang";
+
+const subtitleLanguage = ref(localStorage.getItem(SUBTITLE_STORAGE) || "zh_en");
+const alibabaApiKey = ref(localStorage.getItem(API_KEY_STORAGE) || "");
+
+const mode = ref("image_audio");
+const imageFile = ref(null);
 const audioFile = ref(null);
-const videoFile = ref(null);
-const configs = ref([]);
-const selectedConfigId = ref("");
-const alibabaApiKey = ref("");
-const configError = ref("");
+const usingDefaultImage = ref(true);
+const usingDefaultAudio = ref(true);
+const sampleFile = ref(null);
+const cloneText = ref("");
+const clonedAudioUrl = ref("");
+
+const scriptText = ref("你好，我是你的数字人助手，很高兴为你服务。");
+const DEFAULT_SUBTITLE_ZH = "你好，我是你的数字人助手，很高兴为你服务。";
+const DEFAULT_SUBTITLE_EN = "Hello, I am your digital human assistant. Nice to serve you.";
 const loading = ref(false);
+const progress = ref("等待开始");
 const error = ref("");
 const result = ref(null);
+const downloadHint = ref("");
+const downloadPathHint = ref("");
 
-const canSubmit = computed(() => scriptText.value.trim().length >= 2 && !loading.value);
-const selectedConfig = computed(() => configs.value.find((config) => String(config.id) === String(selectedConfigId.value)) || null);
-const submittedConfigId = computed(() => (selectedConfigId.value === "" ? null : selectedConfigId.value));
-const isAlibabaWanxiang = computed(() => selectedConfig.value?.engine_type === "alibaba_wanxiang");
+watch(subtitleLanguage, (value) => localStorage.setItem(SUBTITLE_STORAGE, value));
+watch(alibabaApiKey, (value) => localStorage.setItem(API_KEY_STORAGE, value));
 
-async function loadConfigs() {
-  configError.value = "";
-  try {
-    const payload = await fetchDigitalHumanVideoConfigs();
-    configs.value = Array.isArray(payload.configs) ? payload.configs : [];
-    selectedConfigId.value = payload.default_config_id ?? configs.value[0]?.id ?? "";
-  } catch (err) {
-    configs.value = [];
-    selectedConfigId.value = "";
-    configError.value = err.message || "配置加载失败";
-  }
+const canGenerate = computed(() => {
+  if (!alibabaApiKey.value.trim()) return false;
+  if (!usingDefaultImage.value && !imageFile.value) return false;
+  if (mode.value === "image_audio") return usingDefaultAudio.value || !!audioFile.value;
+  return !!clonedAudioUrl.value;
+});
+
+function formatDateStamp() {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  return `${y}${m}${d}`;
+}
+
+function onImageFile(event) {
+  const file = event.target.files?.[0] || null;
+  imageFile.value = file;
+  usingDefaultImage.value = !file;
 }
 
 function onAudioFile(event) {
-  audioFile.value = event.target.files?.[0] || null;
+  const file = event.target.files?.[0] || null;
+  audioFile.value = file;
+  usingDefaultAudio.value = !file;
 }
 
-function onVideoFile(event) {
-  videoFile.value = event.target.files?.[0] || null;
+function onSampleFile(event) {
+  sampleFile.value = event.target.files?.[0] || null;
 }
 
-async function submitVideo() {
-  if (scriptText.value.trim().length < 2) {
-    error.value = "请输入至少 2 个字的口播脚本";
+function useDefaultImage() {
+  imageFile.value = null;
+  usingDefaultImage.value = true;
+}
+
+function useDefaultAudio() {
+  audioFile.value = null;
+  usingDefaultAudio.value = true;
+}
+
+async function generateClonedAudio() {
+  if (!alibabaApiKey.value.trim()) {
+    error.value = "请先输入阿里云 API Key";
+    return;
+  }
+  if (!sampleFile.value) {
+    error.value = "请先上传声音样本";
+    return;
+  }
+  if (cloneText.value.trim().length < 2) {
+    error.value = "请输入要朗读的文本";
     return;
   }
   loading.value = true;
   error.value = "";
-  result.value = null;
+  progress.value = "步骤 1/2：声音复刻中";
   try {
-    result.value = await generateDigitalHumanVideo({
-      script: scriptText.value.trim(),
-      audioMode: audioMode.value,
-      videoMode: videoMode.value,
-      audioFile: audioMode.value === "upload" ? audioFile.value : null,
-      videoFile: videoMode.value === "upload" ? videoFile.value : null,
-      configId: submittedConfigId.value,
-      alibabaApiKey: isAlibabaWanxiang.value ? alibabaApiKey.value.trim() : "",
+    const data = await cloneVoiceAndSynthesize({
+      alibabaApiKey: alibabaApiKey.value.trim(),
+      text: cloneText.value.trim(),
+      sampleFile: sampleFile.value,
     });
+    progress.value = "步骤 2/2：语音合成完成";
+    clonedAudioUrl.value = data.audio_url || "";
+    scriptText.value = cloneText.value.trim();
   } catch (err) {
-    error.value = err.message || "数字人视频生成失败";
+    error.value = err.message || "声音克隆失败";
   } finally {
     loading.value = false;
   }
 }
 
-onMounted(loadConfigs);
+async function submitVideo() {
+  if (!canGenerate.value) return;
+  loading.value = true;
+  error.value = "";
+  result.value = null;
+  progress.value = "步骤 1/3：准备素材";
+  try {
+    const resolvedVideoMode = usingDefaultImage.value ? "default" : "upload";
+    let resolvedAudioMode = "upload";
+    let uploadAudioFile = null;
+
+    if (mode.value === "image_audio") {
+      resolvedAudioMode = usingDefaultAudio.value ? "default" : "upload";
+      uploadAudioFile = resolvedAudioMode === "upload" ? audioFile.value : null;
+      progress.value = "步骤 2/3：提交图片与音频到阿里云万象";
+    } else {
+      progress.value = "步骤 2/3：准备克隆语音音频";
+      const response = await fetch(clonedAudioUrl.value);
+      const blob = await response.blob();
+      uploadAudioFile = new File([blob], "cloned-audio.mp3", { type: "audio/mpeg" });
+      progress.value = "步骤 3/3：提交阿里云万象视频生成任务";
+    }
+
+    const resolvedScript =
+      mode.value === "clone_text"
+        ? scriptText.value.trim()
+        : resolvedAudioMode === "default"
+          ? `${DEFAULT_SUBTITLE_ZH}\n${DEFAULT_SUBTITLE_EN}`
+          : "";
+
+    result.value = await generateDigitalHumanVideo({
+      script: resolvedScript,
+      audioMode: resolvedAudioMode,
+      videoMode: resolvedVideoMode,
+      subtitleMode: subtitleLanguage.value,
+      audioFile: uploadAudioFile,
+      videoFile: resolvedVideoMode === "upload" ? imageFile.value : null,
+      configId: "",
+      alibabaApiKey: alibabaApiKey.value.trim(),
+    });
+    progress.value = "生成完成";
+  } catch (err) {
+    error.value = err.message || "生成视频失败";
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function downloadVideo() {
+  if (!result.value?.video_url && !result.value?.download_url) return;
+  downloadHint.value = "正在准备下载，请稍候...";
+  downloadPathHint.value = "";
+  try {
+    const filename = `数字人视频_${formatDateStamp()}.mp4`;
+    const saveByAnchor = (href, withDownloadName = false) => {
+      const link = document.createElement("a");
+      link.href = href;
+      if (withDownloadName) link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    };
+
+    const directHref = result.value.download_url || result.value.video_url;
+
+    if (result.value.download_url) {
+      // 优先走后端下载接口（Content-Disposition），稳定性高于 fetch+blob。
+      saveByAnchor(directHref, false);
+      downloadHint.value = "下载完成";
+      downloadPathHint.value = `已触发浏览器下载：${filename}（通常保存在系统“下载”目录）`;
+      return;
+    }
+
+    const response = await fetch(result.value.video_url);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const blob = await response.blob();
+    if (!blob || blob.size === 0) {
+      saveByAnchor(directHref, false);
+      downloadHint.value = "下载完成";
+      downloadPathHint.value = `已触发浏览器下载：${filename}（通常保存在系统“下载”目录）`;
+      return;
+    }
+    const blobUrl = URL.createObjectURL(blob);
+    if ("showSaveFilePicker" in window) {
+      try {
+        const handle = await window.showSaveFilePicker({
+          suggestedName: filename,
+          types: [{ description: "MP4 Video", accept: { "video/mp4": [".mp4"] } }],
+        });
+        const writable = await handle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        downloadPathHint.value = `已保存：${handle.name}`;
+      } catch {
+        saveByAnchor(blobUrl, true);
+        downloadPathHint.value = `已触发浏览器下载：${filename}（通常保存在系统“下载”目录）`;
+      }
+    } else {
+      saveByAnchor(blobUrl, true);
+      downloadPathHint.value = `已触发浏览器下载：${filename}（通常保存在系统“下载”目录）`;
+    }
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 10_000);
+    downloadHint.value = "下载完成";
+  } catch (err) {
+    downloadHint.value = `下载失败：${err.message || "未知错误"}`;
+    downloadPathHint.value = "";
+  }
+}
+
+onMounted(() => {
+  useDefaultImage();
+  useDefaultAudio();
+});
 </script>
 
 <template>
   <main class="digital-video-page">
-    <section class="digital-video-hero">
-      <p class="section-kicker">Digital Human Video</p>
-      <h1>数字人视频生成</h1>
-      <p>输入脚本，选择默认或上传素材，生成可下载 mp4。</p>
+    <section class="card">
+      <h2>API 配置</h2>
+      <label class="field">
+        阿里云 API Key
+        <input v-model="alibabaApiKey" type="password" autocomplete="off" placeholder="请输入阿里云万象 API Key" />
+      </label>
+      <div class="field">
+        <span>字幕语言</span>
+        <div class="radio-group">
+          <label><input v-model="subtitleLanguage" type="radio" value="zh_en" /> 中英文双语</label>
+        </div>
+      </div>
+      <p class="hint">字幕由音频自动识别并生成中英文双语，不需要手工输入。</p>
     </section>
 
-    <section class="digital-video-layout">
-      <form class="generator-panel" @submit.prevent="submitVideo">
-        <div class="config-picker">
-          <label for="video-config">视频配置</label>
-          <select id="video-config" v-model="selectedConfigId">
-            <option v-if="!configs.length" value="">本地默认配置</option>
-            <option v-for="config in configs" :key="config.id" :value="config.id">
-              {{ config.name }} / {{ config.engine_label }} / {{ config.subtitle_label }}
-            </option>
-          </select>
-          <p v-if="selectedConfig" class="config-summary">
-            当前配置：{{ selectedConfig.name }}，{{ selectedConfig.engine_label }}，{{ selectedConfig.subtitle_label }}
-          </p>
-          <p v-else class="config-summary">当前配置：本地默认配置</p>
-          <p v-if="isAlibabaWanxiang" class="config-hint">
-            阿里万相会从视频素材提取首帧作为数字人人像；默认音频会用脚本文本生成语音。
-          </p>
-          <label v-if="isAlibabaWanxiang" class="api-key-field">
-            阿里云 API Key
-            <input
-              v-model="alibabaApiKey"
-              type="password"
-              autocomplete="off"
-              placeholder="留空则使用后台配置的 API Key"
-            />
-          </label>
-          <p v-if="configError" class="config-error">{{ configError }}</p>
+    <section class="card">
+      <h2>生成模式</h2>
+      <div class="tabs">
+        <button :class="{ active: mode === 'image_audio' }" type="button" @click="mode = 'image_audio'">模式一：照片+音频</button>
+        <button :class="{ active: mode === 'clone_text' }" type="button" @click="mode = 'clone_text'">模式二：克隆音色+文本</button>
+      </div>
+
+      <div v-if="mode === 'image_audio'" class="mode-grid">
+        <div class="field">
+          <span>图片上传（jpg/png）</span>
+          <input type="file" accept=".jpg,.jpeg,.png,image/*" @change="onImageFile" />
+          <button type="button" @click="useDefaultImage">使用默认图片</button>
+          <small>{{ usingDefaultImage ? "后端默认图片" : imageFile?.name || "未选择图片" }}</small>
         </div>
-
-        <label class="script-field">
-          口播脚本
-          <textarea v-model="scriptText" rows="7" placeholder="请输入想让数字人播报的内容"></textarea>
-        </label>
-
-        <div class="source-grid">
-          <fieldset>
-            <legend>音频来源</legend>
-            <label><input v-model="audioMode" type="radio" value="default" /> 默认音频</label>
-            <label><input v-model="audioMode" type="radio" value="upload" /> 上传音频</label>
-            <input v-if="audioMode === 'upload'" type="file" accept=".mp3,.wav,.m4a,.aac,audio/*" @change="onAudioFile" />
-          </fieldset>
-
-          <fieldset>
-            <legend>视频来源</legend>
-            <label><input v-model="videoMode" type="radio" value="default" /> 默认视频</label>
-            <label><input v-model="videoMode" type="radio" value="upload" /> 上传视频</label>
-            <input v-if="videoMode === 'upload'" type="file" accept=".mp4,.mov,.webm,video/*" @change="onVideoFile" />
-          </fieldset>
+        <div class="field">
+          <span>音频上传（mp3/wav）</span>
+          <input type="file" accept=".mp3,.wav,.m4a,audio/*" @change="onAudioFile" />
+          <button type="button" @click="useDefaultAudio">使用默认音频</button>
+          <small>{{ usingDefaultAudio ? "后端默认音频" : audioFile?.name || "未选择音频" }}</small>
         </div>
+      </div>
 
-        <p v-if="error" class="video-error">{{ error }}</p>
-        <button class="generate-button" type="submit" :disabled="!canSubmit">
-          {{ loading ? "生成中..." : "生成视频" }}
-        </button>
-      </form>
-
-      <aside class="result-panel">
-        <div class="result-head">
-          <p class="section-kicker">Result</p>
-          <h2>生成结果</h2>
+      <div v-else class="mode-grid">
+        <div class="field">
+          <span>声音样本（建议 10-20 秒）</span>
+          <input type="file" accept=".mp3,.wav,.m4a,audio/*" @change="onSampleFile" />
+          <small>{{ sampleFile?.name || "未选择样本" }}</small>
+          <small class="hint">支持本地上传 wav/mp3/m4a，后端会自动转换并提交音色复刻。</small>
         </div>
-        <p v-if="loading" class="result-status">正在合成视频，请稍候。</p>
-        <p v-else-if="!result" class="result-status">等待生成任务。</p>
-        <template v-else>
-          <p class="result-status">{{ result.message }}</p>
-          <video v-if="result.video_url" :src="result.video_url" controls></video>
-          <a v-if="result.download_url" class="download-button" :href="result.download_url">下载 mp4</a>
-        </template>
-      </aside>
+        <div class="field">
+          <span>克隆音色朗读文本</span>
+          <textarea v-model="cloneText" rows="5" placeholder="请输入要朗读的文字"></textarea>
+          <button type="button" :disabled="loading" @click="generateClonedAudio">克隆音色并生成语音</button>
+          <audio v-if="clonedAudioUrl" :src="clonedAudioUrl" controls />
+          <small class="hint">当前使用阿里云百炼 API Key 完成音色复刻与语音合成。</small>
+        </div>
+        <div class="field">
+          <span>图片上传（jpg/png）</span>
+          <input type="file" accept=".jpg,.jpeg,.png,image/*" @change="onImageFile" />
+          <button type="button" @click="useDefaultImage">使用默认图片</button>
+          <small>{{ usingDefaultImage ? "后端默认图片" : imageFile?.name || "未选择图片" }}</small>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>生成视频</h2>
+      <button class="primary" type="button" :disabled="loading || !canGenerate" @click="submitVideo">
+        {{ loading ? "生成中..." : "生成数字人视频" }}
+      </button>
+      <p class="hint">{{ progress }}</p>
+      <p v-if="error" class="error">{{ error }}</p>
+      <video v-if="result?.video_url" :src="result.video_url" controls />
+      <div v-if="result?.video_url" class="download-row">
+        <button type="button" @click="downloadVideo">下载视频</button>
+        <span class="hint">{{ downloadHint }}</span>
+      </div>
+      <p v-if="downloadPathHint" class="hint">{{ downloadPathHint }}</p>
     </section>
   </main>
 </template>
@@ -155,178 +302,98 @@ onMounted(loadConfigs);
   width: min(1120px, 94vw);
   margin: 28px auto 48px;
   display: grid;
-  gap: 18px;
-}
-
-.digital-video-hero {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: linear-gradient(135deg, #fffdf8 0%, #e8fffb 100%);
-  padding: 24px;
-}
-
-.digital-video-hero h1 {
-  margin: 8px 0;
-  font-size: clamp(28px, 4vw, 42px);
-}
-
-.digital-video-hero p {
-  color: var(--ink-soft);
-  margin: 0;
-}
-
-.digital-video-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
   gap: 16px;
-  align-items: start;
 }
 
-.generator-panel,
-.result-panel {
+.card {
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: rgba(255, 253, 250, 0.92);
-  box-shadow: var(--shadow-soft);
+  background: rgba(255, 255, 255, 0.94);
   padding: 18px;
-}
-
-.script-field {
   display: grid;
-  gap: 8px;
-  color: var(--ink-soft);
-  font-size: 14px;
-  font-weight: 800;
+  gap: 12px;
 }
 
-.api-key-field {
-  display: grid;
-  gap: 8px;
-  color: var(--ink-soft);
-  font-size: 13px;
-  font-weight: 800;
-}
-
-.config-picker {
-  display: grid;
-  gap: 8px;
-  margin-bottom: 14px;
-  min-width: 0;
-}
-
-.config-picker label {
-  color: var(--ink-soft);
-  font-size: 14px;
-  font-weight: 800;
-}
-
-.config-picker select {
-  border: 1px solid #d8c9b1;
-  border-radius: 8px;
-  min-width: 0;
-  width: 100%;
-}
-
-.config-summary,
-.config-hint,
-.config-error {
-  font-size: 13px;
-  line-height: 1.5;
+.card h2 {
   margin: 0;
-  overflow-wrap: anywhere;
 }
 
-.config-summary {
-  color: var(--ink-soft);
+.field {
+  display: grid;
+  gap: 8px;
 }
 
-.config-hint {
-  color: var(--brand-strong);
+.radio-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
 }
 
-.config-error {
-  color: var(--danger);
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
-.script-field textarea {
-  min-height: 170px;
+.tabs button {
+  border: 1px solid #ccd2da;
+  border-radius: 6px;
+  background: #f7f9fb;
+  padding: 8px 12px;
+  cursor: pointer;
 }
 
-.source-grid {
+.tabs button.active {
+  border-color: #4d8cff;
+  background: #eaf2ff;
+}
+
+.mode-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  margin-top: 14px;
+  gap: 14px;
 }
 
-fieldset {
-  border: 1px solid #d8c9b1;
-  border-radius: 8px;
-  display: grid;
-  gap: 9px;
-  margin: 0;
-  padding: 13px;
-}
-
-legend {
-  color: var(--brand-strong);
-  font-weight: 900;
-  padding: 0 5px;
-}
-
-fieldset label {
-  align-items: center;
-  display: flex;
-  gap: 8px;
-  color: var(--ink-strong);
-}
-
-input[type="radio"] {
-  width: auto;
-}
-
-.generate-button,
-.download-button {
-  border: 1px solid #7bcfc4;
-  border-radius: 8px;
-  background: #e8fffb;
-  color: var(--brand-strong);
-  cursor: pointer;
-  display: inline-flex;
-  font-weight: 900;
-  margin-top: 14px;
+.primary {
+  width: fit-content;
+  border: 1px solid #4d8cff;
+  background: #4d8cff;
+  color: #fff;
+  border-radius: 6px;
   padding: 10px 14px;
+  cursor: pointer;
 }
 
-.generate-button:disabled {
-  cursor: wait;
-  opacity: 0.58;
+.primary:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
-.video-error {
-  color: var(--danger);
-  margin: 12px 0 0;
+.error {
+  color: #d93025;
+  margin: 0;
 }
 
-.result-head h2 {
-  margin: 4px 0 12px;
+.hint {
+  color: #5f6b7a;
+  margin: 0;
 }
 
-.result-status {
-  color: var(--ink-soft);
-  margin: 0 0 12px;
-}
-
-.result-panel video {
+video {
   width: 100%;
-  border-radius: 8px;
-  border: 1px solid #d8c9b1;
+  border: 1px solid #d8dde4;
+  border-radius: 6px;
   background: #111;
 }
 
+.download-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
 @media (max-width: 860px) {
-  .digital-video-layout,
-  .source-grid {
+  .mode-grid {
     grid-template-columns: 1fr;
   }
 }
