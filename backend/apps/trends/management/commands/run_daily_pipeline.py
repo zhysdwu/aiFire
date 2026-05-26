@@ -25,7 +25,7 @@ from apps.trends.services.phrase_extractor import (
     extract_phrases_basic,
     extract_phrases_with_llm,
 )
-from apps.trends.services.risk import assess_risk
+from apps.trends.services.risk import ai_batch_assess, apply_ai_verdict, assess_risk
 from apps.trends.services.source_collectors import (
     fetch_answer_the_public_terms_from_csv,
     fetch_google_trends_terms,
@@ -378,11 +378,9 @@ class Command(BaseCommand):
                 )
 
         snapshots_qs = TikTokRawSnapshot.objects.filter(fetched_at__gte=run_started).order_by("-fetched_at")
-        if not snapshots_qs.exists():
-            snapshots_qs = TikTokRawSnapshot.objects.order_by("-fetched_at")
         snapshots = list(snapshots_qs[: max(limit * 3, 180)])
         if not snapshots:
-            self.stdout.write(self.style.WARNING("没有可用快照数据，任务结束。"))
+            self.stdout.write(self.style.WARNING("本次未抓取到新的热门快照数据，任务结束（不回退历史快照）。"))
             return ""
 
         texts = [item.title_text for item in snapshots] + [item.caption_text for item in snapshots]
@@ -433,12 +431,21 @@ class Command(BaseCommand):
                         "platform": snapshot.platform or Platform.TIKTOK,
                     }
 
+        base_phrase_risk: dict[str, str] = {}
+        for phrase_text in phrases:
+            base_phrase_risk[phrase_text] = assess_risk(phrase_text)
+        ai_verdicts = ai_batch_assess(phrases)
+
         for phrase_text in phrases:
             metric = metric_by_phrase.get(phrase_text)
             if not metric:
                 continue
 
-            phrase_risk = assess_risk(phrase_text)
+            phrase_risk = apply_ai_verdict(
+                phrase_text,
+                ai_verdicts.get(phrase_text) or {},
+                base_phrase_risk.get(phrase_text, RiskLevel.LOW),
+            )
             phrase_platform = metric.get("platform") or Platform.TIKTOK
             phrase, _ = Phrase.objects.get_or_create(
                 text=phrase_text,

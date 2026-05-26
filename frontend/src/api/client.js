@@ -229,6 +229,7 @@ export async function generateDigitalHumanVideo({
   script,
   audioMode = "default",
   videoMode = "default",
+  subtitleMode = "",
   audioFile = null,
   videoFile = null,
   configId = null,
@@ -238,6 +239,7 @@ export async function generateDigitalHumanVideo({
   formData.set("script", script);
   formData.set("audio_mode", audioMode);
   formData.set("video_mode", videoMode);
+  if (subtitleMode) formData.set("subtitle_mode", subtitleMode);
   if (audioFile) formData.set("audio_file", audioFile);
   if (videoFile) formData.set("video_file", videoFile);
   if (configId !== null && configId !== undefined && configId !== "") {
@@ -257,6 +259,30 @@ export async function generateDigitalHumanVideo({
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     throw new Error(payload.message || payload.detail || "数字人视频生成失败");
+  }
+  return payload;
+}
+
+export async function cloneVoiceAndSynthesize({
+  alibabaApiKey,
+  text,
+  sampleFile,
+}) {
+  const formData = new FormData();
+  formData.set("alibaba_api_key", alibabaApiKey || "");
+  formData.set("text", text || "");
+  if (sampleFile) formData.set("sample_file", sampleFile);
+
+  const csrfToken = readCookie("csrftoken");
+  const response = await fetch("/api/digital-human/clone-tts/", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "X-CSRFToken": csrfToken },
+    body: formData,
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.message || payload.detail || "声音克隆失败");
   }
   return payload;
 }

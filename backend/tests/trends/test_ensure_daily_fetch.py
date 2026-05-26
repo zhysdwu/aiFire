@@ -91,6 +91,71 @@ def test_keep_checkpoint_when_pipeline_failed(monkeypatch):
 
 
 @pytest.mark.django_db
+def test_skip_auto_fetch_when_today_failed_recently(monkeypatch):
+    today = timezone.localdate()
+    failed_run = DailyWorkflowRun.objects.create(
+        platform=Platform.TIKTOK,
+        run_date=today,
+        fetch_status=WorkflowStatus.FAILED,
+        last_message="network failed",
+    )
+    calls = []
+
+    def fake_call_command(*args, **kwargs):
+        calls.append((args, kwargs))
+        return True
+
+    monkeypatch.setattr(ensure_daily_fetch_module, "call_command", fake_call_command)
+
+    result = ensure_daily_fetch_module.Command().handle(
+        limit=60,
+        source="official",
+        region="US",
+        failover_after_minutes=30,
+        failure_retry_after_minutes=60,
+    )
+
+    assert result == "skipped"
+    assert calls == []
+    failed_run.refresh_from_db()
+    assert failed_run.fetch_status == WorkflowStatus.FAILED
+
+
+@pytest.mark.django_db
+def test_retry_auto_fetch_when_today_failure_is_older_than_one_hour(monkeypatch):
+    today = timezone.localdate()
+    old_failure_at = timezone.now() - timezone.timedelta(minutes=61)
+    DailyWorkflowRun.objects.create(
+        platform=Platform.TIKTOK,
+        run_date=today,
+        fetch_status=WorkflowStatus.FAILED,
+        last_message="network failed",
+    )
+    DailyWorkflowRun.objects.filter(platform=Platform.TIKTOK, run_date=today).update(
+        updated_at=old_failure_at,
+        finished_at=old_failure_at,
+    )
+    calls = []
+
+    def fake_call_command(*args, **kwargs):
+        calls.append((args, kwargs))
+        return False
+
+    monkeypatch.setattr(ensure_daily_fetch_module, "call_command", fake_call_command)
+
+    result = ensure_daily_fetch_module.Command().handle(
+        limit=60,
+        source="official",
+        region="US",
+        failover_after_minutes=30,
+        failure_retry_after_minutes=60,
+    )
+
+    assert result == "failed"
+    assert len(calls) == 1
+
+
+@pytest.mark.django_db
 def test_daily_checkpoint_is_platform_scoped():
     tiktok = DailyFetchCheckpoint.get_for_platform(Platform.TIKTOK)
     instagram = DailyFetchCheckpoint.get_for_platform(Platform.INSTAGRAM)

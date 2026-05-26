@@ -2,6 +2,7 @@
 
 from apps.trends.api.digital_human_views import (
     DigitalHumanChatView,
+    DigitalHumanCloneTtsView,
     DigitalHumanVideoConfigListView,
     DigitalHumanVideoCreateView,
     DigitalHumanVideoDownloadView,
@@ -27,6 +28,7 @@ urlpatterns = [
     path("digital-human/chat/", DigitalHumanChatView.as_view(), name="digital-human-chat"),
     path("digital-human/video-configs/", DigitalHumanVideoConfigListView.as_view(), name="digital-human-video-config-list"),
     path("digital-human/videos/", DigitalHumanVideoCreateView.as_view(), name="digital-human-video-create"),
+    path("digital-human/clone-tts/", DigitalHumanCloneTtsView.as_view(), name="digital-human-clone-tts"),
     path("digital-human/videos/<str:job_id>/download/", DigitalHumanVideoDownloadView.as_view(), name="digital-human-video-download"),
     path("session-info/", SessionInfoView.as_view(), name="session-info"),
     path("review/phrases/", PhraseReviewListView.as_view(), name="review-phrase-list"),

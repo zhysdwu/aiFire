@@ -303,7 +303,8 @@ class WorkflowConfigView(APIView):
         return Response(update_pipeline_config(config))
 
 class WorkflowTriggerView(APIView):
-    permission_classes = [permissions.AllowAny]
+    authentication_classes = [SessionAuthentication]
+    permission_classes = [permissions.IsAdminUser]
 
     def post(self, request):
         from apps.trends.models import WorkflowStatus
@@ -324,7 +325,20 @@ class WorkflowTriggerView(APIView):
             from io import StringIO
             from django.core.management import call_command
             out = StringIO()
-            call_command("run_daily_pipeline", platform=platform, step=step, stdout=out)
+            source = (request.data.get("source") or "official").strip().lower()
+            if source not in {"official", "all", "legacy"}:
+                source = "official"
+
+            call_command(
+                "run_daily_pipeline",
+                "--source",
+                source,
+                "--region",
+                "US",
+                "--limit",
+                "60",
+                stdout=out,
+            )
             output = out.getvalue()
             mark_step(platform, step, WorkflowStatus.SUCCESS, output[:255])
             return Response({"status": "success", "platform": platform, "step": step, "message": output[:255]})

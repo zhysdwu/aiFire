@@ -173,6 +173,19 @@ async function runAllPlatforms() {
   }
 }
 
+async function triggerDailyFetch() {
+  const key = "daily_fetch";
+  pipelineTriggerLoading.value[key] = true;
+  try {
+    await triggerWorkflowStep(platformValue.value, "fetch");
+  } catch (err) {
+    alert("手动抓取失败：" + (err.message || "未知错误"));
+  } finally {
+    pipelineTriggerLoading.value[key] = false;
+    startPollingWorkflow();
+  }
+}
+
 function startPollingWorkflow() {
   stopPollingWorkflow();
   pipelineStatusPollTimer.value = setInterval(async () => {
@@ -504,7 +517,18 @@ async function confirmDelete() {
             <p class="section-kicker">每日工作流</p>
             <h2>采集与推荐状态</h2>
           </div>
-          <span class="date-badge">{{ workflow?.date || "-" }}</span>
+          <div class="workflow-head-actions">
+            <span class="date-badge">{{ workflow?.date || "-" }}</span>
+            <button
+              v-if="isAdminView"
+              type="button"
+              class="workflow-trigger-btn"
+              :disabled="pipelineTriggerLoading.daily_fetch"
+              @click="triggerDailyFetch"
+            >
+              {{ pipelineTriggerLoading.daily_fetch ? "抓取中..." : "手动抓取" }}
+            </button>
+          </div>
         </div>
 
         <div class="workflow-list">
@@ -674,6 +698,9 @@ textarea { resize: vertical; color: #101826; }
 .section-kicker { margin: 0 0 4px; color: #259e92; font-size: 12px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
 .board-card h2 { margin: 0; font-size: 20px; color: #0f172a; }
 .board-note, .date-badge { border: 1px solid #d6e6e3; border-radius: 999px; color: #2e6e67; background: #f4fbfa; padding: 6px 10px; font-size: 12px; }
+.workflow-head-actions { display: flex; align-items: center; gap: 8px; }
+.workflow-trigger-btn { border: 1px solid #7bcfc4; border-radius: 6px; background: #e8fffb; color: #0d5d57; padding: 7px 10px; font-weight: 700; cursor: pointer; }
+.workflow-trigger-btn:disabled { opacity: 0.62; cursor: wait; }
 .platform-rows { display: grid; gap: 12px; }
 .platform-row { border: 1px solid #e4eaf2; border-radius: 8px; background: #fbfdff; padding: 12px; }
 .platform-row-head, .row-meta, .workflow-top { display: flex; justify-content: space-between; gap: 10px; align-items: center; }

@@ -2,6 +2,7 @@ from django import forms
 from django.contrib import admin, messages
 from django.contrib.admin.sites import NotRegistered
 from django.contrib.admin.helpers import ACTION_CHECKBOX_NAME
+from django.contrib.auth.models import Group, User
 from django.shortcuts import render
 from django.utils import timezone
 
@@ -212,3 +213,9 @@ try:
     admin.site.unregister(PhraseDeleteLog)
 except NotRegistered:
     pass
+
+for model in (User, Group):
+    try:
+        admin.site.unregister(model)
+    except NotRegistered:
+        pass

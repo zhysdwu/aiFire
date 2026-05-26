@@ -66,7 +66,7 @@ class PipelineConfigAPITests(TestCase):
         response = self.client.post("/api/workflow/trigger/", {
             "platform": Platform.TIKTOK, "step": "invalid_step"
         }, format="json")
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 403)
 
 
 class PhraseAPIExclusionTests(TestCase):

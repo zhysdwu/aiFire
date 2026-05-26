@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.db import IntegrityError, models, transaction
 from django.test import override_settings
+import subprocess
 import pytest
 from rest_framework.test import APIClient
 
@@ -15,6 +16,7 @@ from apps.trends.services.digital_human_video_service import (
     DigitalHumanVideoError,
     find_ffmpeg_binary,
     generate_digital_human_video,
+    run_ffmpeg_composite,
     validate_generation_request,
 )
 
@@ -28,7 +30,16 @@ def test_validate_generation_request_rejects_short_script():
     with pytest.raises(DigitalHumanVideoError) as exc:
         validate_generation_request(script="a", audio_mode="default", video_mode="default", files={})
     assert exc.value.status_code == 400
-    assert "至少 2 个字" in exc.value.message
+    assert "默认音频" in exc.value.message
+
+
+def test_validate_generation_request_allows_empty_script_for_uploaded_audio():
+    class _Files(dict):
+        def get(self, key, default=None):
+            return super().get(key, default)
+
+    files = _Files(audio_file=object())
+    validate_generation_request(script="", audio_mode="upload", video_mode="default", files=files)
 
 
 def test_validate_generation_request_requires_upload_audio_file():
@@ -110,6 +121,29 @@ def test_find_ffmpeg_binary_uses_local_tools_fallback(tmp_path, monkeypatch):
     assert find_ffmpeg_binary() == str(ffmpeg)
 
 
+def test_run_ffmpeg_composite_uses_finite_image_input_for_uploaded_photo(tmp_path, monkeypatch):
+    image_path = tmp_path / "portrait.jpg"
+    audio_path = tmp_path / "voice.wav"
+    output_path = tmp_path / "output.mp4"
+    image_path.write_bytes(b"fake-image")
+    audio_path.write_bytes(b"fake-audio")
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["kwargs"] = kwargs
+
+    monkeypatch.setattr("apps.trends.services.digital_human_video_service.subprocess.run", fake_run)
+
+    run_ffmpeg_composite("ffmpeg", image_path, audio_path, None, output_path)
+
+    cmd = captured["cmd"]
+    assert "-loop" in cmd
+    assert "-stream_loop" not in cmd
+    assert "-t" in cmd
+    assert captured["kwargs"]["timeout"] == 120
+
+
 @override_settings(MEDIA_URL="/media/")
 @pytest.mark.django_db
 def test_generate_digital_human_video_returns_failed_when_ffmpeg_missing(tmp_path, monkeypatch):
@@ -128,6 +162,44 @@ def test_generate_digital_human_video_returns_failed_when_ffmpeg_missing(tmp_pat
 
     assert result["status"] == "failed"
     assert "ffmpeg" in result["message"].lower()
+
+
+@pytest.mark.django_db
+def test_generate_digital_human_video_returns_failed_when_ffmpeg_times_out(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "apps.trends.services.digital_human_video_service.digital_human_media_root",
+        lambda: tmp_path / "digital_human",
+    )
+    monkeypatch.setattr("apps.trends.services.digital_human_video_service.find_ffmpeg_binary", lambda: "ffmpeg")
+    monkeypatch.setattr("apps.trends.services.digital_human_video_service.ensure_default_assets", lambda ffmpeg: None)
+
+    def fake_run_ffmpeg(*args):
+        raise subprocess.TimeoutExpired(cmd=["ffmpeg"], timeout=120)
+
+    monkeypatch.setattr(
+        "apps.trends.services.digital_human_video_service.run_ffmpeg_composite",
+        fake_run_ffmpeg,
+    )
+
+    result = generate_digital_human_video(
+        script="生成一条默认视频",
+        audio_mode="default",
+        video_mode="default",
+        files={},
+    )
+
+    assert result["status"] == "failed"
+    assert "超时" in result["message"] or "timeout" in result["message"].lower()
+
+
+def test_ensure_default_assets_requires_real_default_files(tmp_path, monkeypatch):
+    from apps.trends.services import digital_human_video_service as svc
+
+    monkeypatch.setattr(svc, "digital_human_media_root", lambda: tmp_path / "digital_human")
+
+    with pytest.raises(DigitalHumanVideoError) as exc:
+        svc.ensure_default_assets("ffmpeg")
+    assert "默认图片缺失" in exc.value.message
 
 
 @pytest.mark.django_db
@@ -638,6 +710,7 @@ def test_digital_human_video_create_passes_alibaba_api_key_override(monkeypatch)
             "script": "Generate a digital human video",
             "audio_mode": "default",
             "video_mode": "default",
+            "subtitle_mode": "zh_en",
             "config_id": "12",
             "alibaba_api_key": "sk-runtime",
         },
@@ -647,6 +720,7 @@ def test_digital_human_video_create_passes_alibaba_api_key_override(monkeypatch)
     assert response.status_code == 200
     assert captured["config_id"] == "12"
     assert captured["api_key_override"] == "sk-runtime"
+    assert captured["subtitle_mode"] == "zh_en"
 
 
 def test_alibaba_wanxiang_client_submits_polls_and_downloads(tmp_path):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from pathlib import Path
 import time
 from typing import Any, Callable
@@ -9,6 +10,8 @@ from urllib.parse import urljoin
 import requests
 
 from apps.trends.services.digital_human_video_service import DigitalHumanVideoError
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -92,6 +95,7 @@ class AlibabaWanxiangClient:
         return headers
 
     def upload_file(self, file_path: Path, *, model_name: str | None = None) -> str:
+        logger.info("[万象] 开始上传素材: %s", file_path.name)
         policy_response = self.session.get(
             self._url("/api/v1/uploads"),
             params={"action": "getPolicy", "model": model_name or self.settings.model_name},
@@ -126,6 +130,7 @@ class AlibabaWanxiangClient:
                 timeout=self.settings.request_timeout_s,
             )
         self._raise_for_response(upload_response, "Failed to upload file to Alibaba OSS")
+        logger.info("[万象] 素材上传成功: %s", object_key)
         return f"oss://{object_key}"
 
     def synthesize_tts(self, script: str) -> str:
@@ -151,6 +156,7 @@ class AlibabaWanxiangClient:
         return audio_url
 
     def create_video_task(self, *, avatar_url: str, audio_url: str) -> str:
+        logger.info("[万象] 开始创建视频任务")
         payload = {
             "model": self.settings.model_name,
             "input": {
@@ -171,9 +177,11 @@ class AlibabaWanxiangClient:
         task_id = ((response.json().get("output") or {}).get("task_id") or "").strip()
         if not task_id:
             raise DigitalHumanVideoError("Alibaba Wanxiang response did not include a task id", 502)
+        logger.info("[万象] 任务创建成功: task_id=%s", task_id)
         return task_id
 
     def wait_for_video_url(self, task_id: str) -> str:
+        logger.info("[万象] 开始轮询任务: task_id=%s timeout=%ss interval=%ss", task_id, self.settings.poll_timeout_s, self.settings.poll_interval_s)
         deadline = time.monotonic() + self.settings.poll_timeout_s
         while time.monotonic() <= deadline:
             response = self.session.get(
@@ -185,18 +193,24 @@ class AlibabaWanxiangClient:
             payload = response.json()
             output = payload.get("output") or {}
             task_status = (output.get("task_status") or output.get("status") or "").upper()
+            logger.info("[万象] 轮询状态: task_id=%s status=%s", task_id, task_status or "UNKNOWN")
             if task_status == "SUCCEEDED":
                 video_url = self._extract_video_url(output)
                 if not video_url:
                     raise DigitalHumanVideoError("Alibaba Wanxiang task succeeded without a video URL", 502)
+                logger.info("[万象] 任务成功: task_id=%s", task_id)
                 return video_url
             if task_status in {"FAILED", "CANCELED", "UNKNOWN"}:
                 message = output.get("message") or output.get("code") or "Alibaba Wanxiang task failed"
                 raise DigitalHumanVideoError(str(message), 502)
             self.sleep(self.settings.poll_interval_s)
-        raise DigitalHumanVideoError("Alibaba Wanxiang task timed out", 504)
+        raise DigitalHumanVideoError(
+            f"Alibaba Wanxiang task timed out (task_id={task_id}, timeout={int(self.settings.poll_timeout_s)}s)",
+            504,
+        )
 
     def download_video(self, video_url: str, output_path: Path) -> None:
+        logger.info("[万象] 开始下载视频: %s", video_url)
         response = self.session.get(video_url, stream=True, timeout=self.settings.request_timeout_s)
         self._raise_for_response(response, "Failed to download Alibaba Wanxiang video")
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -204,6 +218,7 @@ class AlibabaWanxiangClient:
             for chunk in response.iter_content(chunk_size=1024 * 1024):
                 if chunk:
                     dest.write(chunk)
+        logger.info("[万象] 视频下载完成: %s", output_path)
 
     def generate_video(
         self,
@@ -230,6 +245,25 @@ class AlibabaWanxiangClient:
         video_url = self.wait_for_video_url(task_id)
         self.download_video(video_url, output_path)
         return {"task_id": task_id, "source_video_url": video_url}
+
+    def probe_video_capability(self) -> tuple[bool, str]:
+        payload = {
+            "model": self.settings.model_name,
+            "input": {
+                "image_url": "https://example.invalid/avatar.jpg",
+                "audio_url": "https://example.invalid/audio.wav",
+            },
+            "parameters": {"resolution": self.settings.resolution},
+        }
+        response = self.session.post(
+            self._url("/api/v1/services/aigc/image2video/video-synthesis"),
+            headers=self._headers(async_task=True, oss_resolve=True),
+            json=payload,
+            timeout=self.settings.request_timeout_s,
+        )
+        if response.status_code in {401, 403}:
+            return False, f"鉴权或权限失败（HTTP {response.status_code}）"
+        return True, f"接口可达（HTTP {response.status_code}）"
 
     @staticmethod
     def _extract_audio_url(payload: dict[str, Any]) -> str:

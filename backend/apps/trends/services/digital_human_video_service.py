@@ -5,15 +5,19 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+from types import SimpleNamespace
 import uuid
+import re
 
 from django.conf import settings
 from django.core.files.uploadedfile import UploadedFile
 
 
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac"}
-VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm"}
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".jpg", ".jpeg", ".png"}
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
+FFMPEG_TIMEOUT_SECONDS = 120
 
 
 @dataclass
@@ -45,14 +49,14 @@ def digital_human_media_root() -> Path:
 
 
 def validate_generation_request(*, script: str, audio_mode: str, video_mode: str, files) -> None:
-    if len((script or "").strip()) < 2:
-        raise DigitalHumanVideoError("请输入至少 2 个字的口播脚本", 400)
     if audio_mode not in {"default", "upload"}:
         raise DigitalHumanVideoError("音频来源必须是 default 或 upload", 400)
     if video_mode not in {"default", "upload"}:
         raise DigitalHumanVideoError("视频来源必须是 default 或 upload", 400)
     if audio_mode == "upload" and not files.get("audio_file"):
         raise DigitalHumanVideoError("请上传音频文件", 400)
+    if audio_mode == "default" and len((script or "").strip()) < 2:
+        raise DigitalHumanVideoError("使用默认音频时需要至少 2 个字的文案", 400)
     if video_mode == "upload" and not files.get("video_file"):
         raise DigitalHumanVideoError("请上传视频文件", 400)
 
@@ -66,6 +70,84 @@ def build_bilingual_srt_content(script_zh: str, script_en: str) -> str:
     clean_zh = " ".join((script_zh or "").split())
     clean_en = " ".join((script_en or "").split())
     return f"1\n00:00:00,000 --> 00:00:08,000\n{clean_zh}\n{clean_en}\n"
+
+
+def _format_srt_time(seconds: float) -> str:
+    seconds = max(0.0, float(seconds))
+    total_ms = int(round(seconds * 1000))
+    h = total_ms // 3_600_000
+    m = (total_ms % 3_600_000) // 60_000
+    s = (total_ms % 60_000) // 1000
+    ms = total_ms % 1000
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def probe_media_duration_seconds(ffmpeg: str, media_path: Path) -> float:
+    try:
+        proc = subprocess.run(
+            [ffmpeg, "-i", str(media_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        stderr = proc.stderr or ""
+        match = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", stderr)
+        if not match:
+            return 8.0
+        hh = int(match.group(1))
+        mm = int(match.group(2))
+        ss = float(match.group(3))
+        return max(1.0, hh * 3600 + mm * 60 + ss)
+    except Exception:
+        return 8.0
+
+
+def build_timed_bilingual_srt_content(script_zh: str, script_en: str, duration_seconds: float) -> str:
+    clean_zh = " ".join((script_zh or "").split())
+    clean_en = " ".join((script_en or "").split())
+    start = _format_srt_time(0.0)
+    end = _format_srt_time(max(1.0, duration_seconds - 0.1))
+    return f"1\n{start} --> {end}\n{clean_zh}\n{clean_en}\n"
+
+
+def burn_subtitle_to_video(ffmpeg: str, input_video_path: Path, subtitle_path: Path, output_video_path: Path) -> None:
+    subtitle_arg = str(subtitle_path).replace("\\", "/").replace(":", "\\:")
+    subprocess.run(
+        [
+            ffmpeg,
+            "-y",
+            "-i",
+            str(input_video_path),
+            "-vf",
+            f"subtitles='{subtitle_arg}'",
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "copy",
+            str(output_video_path),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=FFMPEG_TIMEOUT_SECONDS,
+    )
+
+
+def _parse_mean_volume_db(stderr_text: str) -> float | None:
+    marker = "mean_volume:"
+    for line in (stderr_text or "").splitlines():
+        if marker not in line:
+            continue
+        right = line.split(marker, 1)[1].strip()
+        token = right.split(" ", 1)[0].strip()
+        if token == "-inf":
+            return float("-inf")
+        try:
+            return float(token)
+        except ValueError:
+            return None
+    return None
 
 
 def local_ffmpeg_roots() -> list[Path]:
@@ -138,6 +220,10 @@ def default_video_path() -> Path:
     return digital_human_media_root() / "defaults" / "default_video.mp4"
 
 
+def default_image_path() -> Path:
+    return digital_human_media_root() / "defaults" / "default_image.png"
+
+
 def resolve_audio_path(audio_mode: str, files, paths: GenerationPaths) -> Path:
     if audio_mode == "default":
         return default_audio_path()
@@ -157,30 +243,35 @@ def resolve_video_path(video_mode: str, files, paths: GenerationPaths) -> Path:
 def ensure_default_assets(ffmpeg: str) -> None:
     audio = default_audio_path()
     video = default_video_path()
+    image = default_image_path()
     audio.parent.mkdir(parents=True, exist_ok=True)
     video.parent.mkdir(parents=True, exist_ok=True)
-    if not audio.exists():
+    if not image.exists():
+        raise DigitalHumanVideoError("默认图片缺失，请先配置人形默认图片。", 500)
+    if image.stat().st_size < 10 * 1024:
+        raise DigitalHumanVideoError("默认图片质量不达标，请更换为清晰人形图片。", 500)
+    if not audio.exists() or audio.stat().st_size < 20 * 1024:
         subprocess.run(
-            [ffmpeg, "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", "8", str(audio)],
+            [ffmpeg, "-y", "-f", "lavfi", "-i", "sine=frequency=220:sample_rate=44100", "-t", "8", str(audio)],
             check=True,
             capture_output=True,
             text=True,
         )
     if not video.exists():
+        raise DigitalHumanVideoError("默认视频缺失，请先配置人形默认视频。", 500)
+
+    null_sink = "NUL" if os.name == "nt" else "/dev/null"
+    volume_probe = subprocess.run(
+        [ffmpeg, "-i", str(audio), "-af", "volumedetect", "-f", "null", null_sink],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    mean_volume = _parse_mean_volume_db(volume_probe.stderr or "")
+    if mean_volume is not None and mean_volume <= -70:
+        # 自愈：静音默认音频自动重建为可听音频，避免页面阻塞。
         subprocess.run(
-            [
-                ffmpeg,
-                "-y",
-                "-f",
-                "lavfi",
-                "-i",
-                "color=c=0x113a35:s=720x1280:r=25",
-                "-t",
-                "8",
-                "-vf",
-                "drawtext=text='AI Digital Human':fontcolor=white:fontsize=52:x=(w-text_w)/2:y=(h-text_h)/2",
-                str(video),
-            ],
+            [ffmpeg, "-y", "-f", "lavfi", "-i", "sine=frequency=220:sample_rate=44100", "-t", "8", str(audio)],
             check=True,
             capture_output=True,
             text=True,
@@ -198,19 +289,18 @@ def run_ffmpeg_composite(
     subtitle_path: Path | None,
     output_path: Path,
 ) -> None:
-    cmd = [
-        ffmpeg,
-        "-y",
-        "-stream_loop",
-        "-1",
-        "-i",
-        str(video_path),
-        "-i",
-        str(audio_path),
-    ]
+    is_still_image = video_path.suffix.lower() in IMAGE_EXTENSIONS
+    cmd = [ffmpeg, "-y"]
+    if is_still_image:
+        cmd.extend(["-loop", "1", "-framerate", "25", "-i", str(video_path)])
+    else:
+        cmd.extend(["-stream_loop", "-1", "-i", str(video_path)])
+    cmd.extend(["-i", str(audio_path)])
     if subtitle_path is not None:
         subtitle_arg = str(subtitle_path).replace("\\", "/").replace(":", "\\:")
         cmd.extend(["-vf", f"subtitles='{subtitle_arg}'"])
+    if is_still_image:
+        cmd.extend(["-t", "8"])
     cmd.extend(
         [
             "-map",
@@ -227,7 +317,7 @@ def run_ffmpeg_composite(
             str(output_path),
         ]
     )
-    subprocess.run(cmd, check=True, capture_output=True, text=True)
+    subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT_SECONDS)
 
 
 def extract_avatar_frame(ffmpeg: str, video_path: Path, image_path: Path) -> Path:
@@ -286,6 +376,8 @@ def _generate_local_ffmpeg_video_impl(
         audio_path = resolve_audio_path(audio_mode, files, paths)
         video_path = resolve_video_path(video_mode, files, paths)
         subtitle_path = paths.subtitle_path
+        if subtitle_mode not in {"none", "zh", "en", "zh_en"}:
+            raise DigitalHumanVideoError("字幕模式不支持，请选择中文、英文或中英文。", 400)
         if subtitle_mode == "none":
             subtitle_path = None
         elif subtitle_mode == "zh_en":
@@ -297,8 +389,15 @@ def _generate_local_ffmpeg_video_impl(
         run_ffmpeg_composite(ffmpeg, video_path, audio_path, subtitle_path, paths.output_path)
     except DigitalHumanVideoError:
         raise
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "status": "failed",
+            "message": f"生成超时：ffmpeg 超过 {exc.timeout or FFMPEG_TIMEOUT_SECONDS} 秒仍未完成，请更换素材后重试",
+        }
     except subprocess.CalledProcessError as exc:
         message = (exc.stderr or exc.stdout or str(exc)).strip()
+        if not message:
+            message = str(exc)
         return {"status": "failed", "message": f"生成失败：{message[:240]}"}
 
     return {
@@ -311,9 +410,17 @@ def _generate_local_ffmpeg_video_impl(
     }
 
 
-def generate_local_ffmpeg_video(*, script: str, audio_mode: str, video_mode: str, files, engine_config=None) -> dict:
+def generate_local_ffmpeg_video(
+    *,
+    script: str,
+    audio_mode: str,
+    video_mode: str,
+    files,
+    engine_config=None,
+    subtitle_mode_override: str = "",
+) -> dict:
     validate_generation_request(script=script, audio_mode=audio_mode, video_mode=video_mode, files=files)
-    subtitle_mode = getattr(engine_config, "subtitle_mode", "zh")
+    subtitle_mode = (subtitle_mode_override or "").strip() or getattr(engine_config, "subtitle_mode", "zh")
     result = _generate_local_ffmpeg_video_impl(
         script=script,
         audio_mode=audio_mode,
@@ -325,17 +432,45 @@ def generate_local_ffmpeg_video(*, script: str, audio_mode: str, video_mode: str
 
 
 def generate_digital_human_video(
-    *, script: str, audio_mode: str, video_mode: str, files, config_id=None, api_key_override: str = ""
+    *,
+    script: str,
+    audio_mode: str,
+    video_mode: str,
+    files,
+    subtitle_mode: str = "",
+    config_id=None,
+    api_key_override: str = "",
 ) -> dict:
     validate_generation_request(script=script, audio_mode=audio_mode, video_mode=video_mode, files=files)
+    from apps.trends.models import DigitalHumanEngineConfig
     from apps.trends.services.digital_human_engines import get_engine_adapter, resolve_engine_config
 
-    config = resolve_engine_config(config_id)
+    runtime_key = (api_key_override or "").strip()
+    if runtime_key and (config_id is None or (isinstance(config_id, str) and not config_id.strip())):
+        # 支持“仅 API Key 调用万象”，无需预置引擎配置。
+        config = SimpleNamespace(
+            id=None,
+            name="Alibaba Wanxiang runtime key",
+            engine_type=DigitalHumanEngineConfig.EngineType.ALIBABA_WANXIANG,
+            subtitle_mode=(subtitle_mode or "zh_en"),
+            is_default=True,
+            is_enabled=True,
+            api_key="",
+            api_base_url="",
+            model_name="",
+            avatar_id="",
+            voice_id="",
+            default_prompt="",
+            extra_config={},
+        )
+    else:
+        config = resolve_engine_config(config_id)
     adapter = get_engine_adapter(config.engine_type)
     return adapter.generate(
         script=script,
         audio_mode=audio_mode,
         video_mode=video_mode,
+        subtitle_mode=subtitle_mode,
         files=files,
         config=config,
         api_key_override=(api_key_override or "").strip(),

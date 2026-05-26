@@ -69,3 +69,60 @@ def test_youtube_collector_normalizes_schema(monkeypatch):
     assert items[0]["platform"] == Platform.YOUTUBE
     assert items[0]["external_id"] == "yt001"
     assert items[0]["source_url"] == "https://www.youtube.com/watch?v=yt001"
+
+
+def test_instagram_collector_uses_trending_defaults(monkeypatch):
+    captured = {}
+
+    def fake_run_actor(actor_id, actor_input):
+        captured["actor_id"] = actor_id
+        captured["actor_input"] = actor_input
+        return []
+
+    monkeypatch.delenv("APIFY_INSTAGRAM_DIRECT_URLS", raising=False)
+    monkeypatch.setattr(apify_collectors, "_run_actor", fake_run_actor)
+
+    apify_collectors.collect_instagram_from_apify(limit=10, region="US")
+
+    assert captured["actor_id"] == "apify/instagram-scraper"
+    assert captured["actor_input"]["directUrls"] == [
+        "https://www.instagram.com/explore/tags/viral/",
+        "https://www.instagram.com/explore/tags/trending/",
+    ]
+
+
+def test_facebook_collector_uses_trending_defaults(monkeypatch):
+    captured = {}
+
+    def fake_run_actor(actor_id, actor_input):
+        captured["actor_id"] = actor_id
+        captured["actor_input"] = actor_input
+        return []
+
+    monkeypatch.delenv("APIFY_FACEBOOK_START_URLS", raising=False)
+    monkeypatch.setattr(apify_collectors, "_run_actor", fake_run_actor)
+
+    apify_collectors.collect_facebook_from_apify(limit=10, region="US")
+
+    assert captured["actor_id"] == "apify/facebook-posts-scraper"
+    assert captured["actor_input"]["startUrls"] == [
+        {"url": "https://www.facebook.com/watch/"},
+        {"url": "https://www.facebook.com/reel/"},
+    ]
+
+
+def test_youtube_collector_uses_trending_defaults(monkeypatch):
+    captured = {}
+
+    def fake_run_actor(actor_id, actor_input):
+        captured["actor_id"] = actor_id
+        captured["actor_input"] = actor_input
+        return []
+
+    monkeypatch.delenv("APIFY_YOUTUBE_SEARCH_QUERIES", raising=False)
+    monkeypatch.setattr(apify_collectors, "_run_actor", fake_run_actor)
+
+    apify_collectors.collect_youtube_from_apify(limit=10, region="US")
+
+    assert captured["actor_id"] == "streamers/youtube-scraper"
+    assert captured["actor_input"]["searchQueries"] == ["trending now", "viral shorts", "popular this week"]

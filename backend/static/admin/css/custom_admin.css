@@ -233,7 +233,7 @@ body.login {
 }
 
 .login #header {
-  width: min(520px, 92vw);
+  width: min(528px, 92vw);
   margin: 64px auto 0;
   border: 1px solid #d8e1ec;
   border-bottom: 0;
@@ -283,7 +283,7 @@ body.login {
 }
 
 .login #content-main {
-  padding: 28px 28px 22px;
+  /*padding: 28px 28px 22px;*/
   color: #142033;
 }
 

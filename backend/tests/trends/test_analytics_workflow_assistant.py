@@ -1,10 +1,12 @@
 import pytest
+from django.core.management import call_command
 from django.db import IntegrityError
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from rest_framework.test import APIClient
 
 from apps.trends.management.commands import ensure_daily_fetch as ensure_daily_fetch_module
+from apps.trends.management.commands import run_daily_pipeline as pipeline_module
 from apps.trends.models import (
     AssistantMessageLog,
     DailyFetchCheckpoint,
@@ -16,6 +18,7 @@ from apps.trends.models import (
     Window,
     WorkflowStatus,
 )
+from apps.trends.services import risk as risk_service
 
 
 @pytest.fixture
@@ -212,3 +215,60 @@ def test_ensure_daily_fetch_marks_failure_workflow_runs(monkeypatch):
     ensure_daily_fetch_module.Command().handle(limit=60, source="official", region="US", failover_after_minutes=30)
 
     assert set(DailyWorkflowRun.objects.values_list("fetch_status", flat=True)) == {WorkflowStatus.FAILED}
+
+
+@pytest.mark.django_db
+def test_run_daily_pipeline_uses_ai_review_to_mark_pending_review(monkeypatch):
+    def fake_collect(self, limit, region, failover_after_minutes):
+        return [
+            {
+                "platform": Platform.TIKTOK,
+                "region": region,
+                "external_id": "quiet-luxury-001",
+                "source_url": "https://example.com/quiet-luxury",
+                "title_text": "quiet luxury",
+                "caption_text": "quiet luxury trend",
+                "raw_metrics": {
+                    "views": 100000,
+                    "diggCount": 10000,
+                    "commentCount": 1000,
+                    "shareCount": 500,
+                },
+            }
+        ]
+
+    monkeypatch.setattr(pipeline_module.Command, "_collect_with_failover", fake_collect)
+    monkeypatch.setattr(pipeline_module, "extract_phrases_basic", lambda texts, top_k=200: ["quiet luxury"])
+    monkeypatch.setattr(pipeline_module, "extract_phrases_with_llm", lambda client, texts: [])
+    monkeypatch.setattr(
+        pipeline_module.DeepSeekClient,
+        "from_env",
+        classmethod(lambda cls: (_ for _ in ()).throw(RuntimeError("skip ai"))),
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "ai_batch_assess",
+        lambda keywords: {"quiet luxury": {"verdict": "REVIEW", "reason": "borderline"}},
+    )
+    monkeypatch.setattr(
+        pipeline_module,
+        "generate_titles_basic",
+        lambda phrase, n=3: [{"template": "A", "title": f"{phrase} title", "caption": "caption"}],
+    )
+
+    result = call_command("run_daily_pipeline", "--source", "official", "--limit", "20")
+
+    assert result == "success"
+    phrase = Phrase.objects.get(text="quiet luxury", platform=Platform.TIKTOK)
+    assert phrase.risk_level == RiskLevel.PENDING_REVIEW
+
+
+@pytest.mark.django_db
+def test_workflow_trigger_requires_admin(api_client):
+    response = api_client.post(
+        "/api/workflow/trigger/",
+        {"platform": Platform.TIKTOK, "step": "fetch"},
+        format="json",
+    )
+
+    assert response.status_code in {401, 403}
